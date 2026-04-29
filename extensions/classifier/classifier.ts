@@ -5,6 +5,7 @@ import {
   defineTool,
   getAgentDir,
   SessionManager,
+  SettingsManager,
 } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 
@@ -125,6 +126,7 @@ export const createClassifier = async (options: CreateClassifierOptions) => {
     authStorage,
     modelRegistry,
     sessionManager: SessionManager.inMemory(),
+    settingsManager: SettingsManager.inMemory(),
     resourceLoader,
     tools: ["classify_shell_command"],
     customTools: [
