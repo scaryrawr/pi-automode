@@ -3,27 +3,36 @@ import {
   type ToolCallEventResult,
   isToolCallEventType,
 } from "@mariozechner/pi-coding-agent";
-import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
-import { classifyCommand } from "./classifier/classifier.js";
-
-const authStorage = AuthStorage.create();
-const modelRegistry = ModelRegistry.create(authStorage);
+import { createClassifier } from "./classifier/classifier.js";
 
 export default async function (pi: ExtensionAPI) {
+  type Classifier = Awaited<ReturnType<typeof createClassifier>>;
+  let classifier: Promise<Classifier> | undefined;
+
+  pi.on("session_shutdown", async () => {
+    if (!classifier) {
+      return;
+    }
+
+    (await classifier).dispose();
+    classifier = undefined;
+  });
+
   pi.on("tool_call", async (event, ctx): Promise<ToolCallEventResult> => {
     // Allow all non-bash tools by default
     if (!isToolCallEventType("bash", event)) {
       return { block: false };
     }
 
-    return classifyCommand({
-      authStorage,
-      modelRegistry,
+    classifier ??= createClassifier({
+      authStorage: ctx.modelRegistry.authStorage,
+      modelRegistry: ctx.modelRegistry,
       modelIdentifier: {
         provider: "lmstudio",
-        id: "qwen3.5-4b",
+        id: "qwen3.5-4b-mxfp8",
       },
-      command: event.input.command,
     });
+
+    return (await classifier).classify(event.input.command);
   });
 }
