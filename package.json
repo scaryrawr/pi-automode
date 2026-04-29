@@ -16,6 +16,8 @@
     "vitest": "^4.1.5"
   },
   "pi": {
-    "extensions": "./extensions/"
+    "extensions": [
+      "./extensions/"
+    ]
   }
 }
