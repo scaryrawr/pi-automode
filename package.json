@@ -1,0 +1,21 @@
+{
+  "name": "pi-automode",
+  "version": "1.0.0",
+  "description": "auto mode for pi",
+  "license": "MIT",
+  "author": "Mike Wallio",
+  "type": "module",
+  "scripts": {
+    "build": "tsgo -p ./tsconfig.json",
+    "test": "vitest"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-coding-agent": "^0.70.6",
+    "@typescript/native-preview": "^7.0.0-dev.20260428.1",
+    "typebox": "^1.1.34",
+    "vitest": "^4.1.5"
+  },
+  "pi": {
+    "extensions": "./extensions/"
+  }
+}
