@@ -5,23 +5,22 @@ import {
   isToolCallEventType,
 } from "@mariozechner/pi-coding-agent";
 import {
-  DEFAULT_CLASSIFIER_MODEL_IDENTIFIER,
   loadClassifierModelIdentifier,
   persistClassifierModelIdentifier,
-} from "./automode/settings.js";
+} from "./automode/config.js";
 import type { ModelIdentifier } from "./automode/types.js";
 import { createClassifier } from "./classifier/classifier.js";
 
 type Classifier = Awaited<ReturnType<typeof createClassifier>>;
 
-type ClassifierContext = Pick<ExtensionContext, "cwd" | "modelRegistry">;
+type ClassifierContext = Pick<ExtensionContext, "modelRegistry">;
 
 export default async function (pi: ExtensionAPI) {
   let selectedModelIdentifier: ModelIdentifier | undefined;
   let classifier: Promise<Classifier> | undefined;
 
-  const getSelectedModelIdentifier = (cwd: string) => {
-    selectedModelIdentifier ??= loadClassifierModelIdentifier(cwd);
+  const getSelectedModelIdentifier = () => {
+    selectedModelIdentifier ??= loadClassifierModelIdentifier();
     return selectedModelIdentifier;
   };
 
@@ -41,21 +40,20 @@ export default async function (pi: ExtensionAPI) {
   };
 
   const resolveClassifierModelIdentifier = (ctx: ClassifierContext) => {
-    const configuredModelIdentifier = getSelectedModelIdentifier(ctx.cwd);
+    const configuredModelIdentifier = getSelectedModelIdentifier();
+    if (!configuredModelIdentifier) {
+      throw new Error(
+        "No automode classifier model configured. Run /automodel to select one.",
+      );
+    }
+
     if (ctx.modelRegistry.find(configuredModelIdentifier.provider, configuredModelIdentifier.id)) {
       return configuredModelIdentifier;
     }
 
-    if (
-      ctx.modelRegistry.find(
-        DEFAULT_CLASSIFIER_MODEL_IDENTIFIER.provider,
-        DEFAULT_CLASSIFIER_MODEL_IDENTIFIER.id,
-      )
-    ) {
-      return DEFAULT_CLASSIFIER_MODEL_IDENTIFIER;
-    }
-
-    return configuredModelIdentifier;
+    throw new Error(
+      `Classifier model ${configuredModelIdentifier.id} [${configuredModelIdentifier.provider}] is not available`,
+    );
   };
 
   const getClassifier = async (ctx: ClassifierContext) => {
@@ -73,8 +71,8 @@ export default async function (pi: ExtensionAPI) {
     }
   };
 
-  pi.on("session_start", async (_event, ctx) => {
-    selectedModelIdentifier = loadClassifierModelIdentifier(ctx.cwd);
+  pi.on("session_start", async () => {
+    selectedModelIdentifier = loadClassifierModelIdentifier();
   });
 
   pi.on("session_shutdown", async () => {
@@ -114,7 +112,7 @@ export default async function (pi: ExtensionAPI) {
         id: model.id,
       };
 
-      const settingsErrors = await persistClassifierModelIdentifier(ctx.cwd, selectedModelIdentifier);
+      const settingsErrors = persistClassifierModelIdentifier(selectedModelIdentifier);
       await disposeClassifier();
 
       if (settingsErrors.length > 0) {
