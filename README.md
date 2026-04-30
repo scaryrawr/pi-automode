@@ -28,7 +28,7 @@ It also includes a built-in list of known-safe commands (e.g., `ls`, `cat`, `ech
 Install the extension using pi's built-in install command:
 
 ```bash
-pi install scaryrawr/pi-automode
+pi install git:github.com/scaryrawr/pi-automode
 ```
 
 ## Configuration
