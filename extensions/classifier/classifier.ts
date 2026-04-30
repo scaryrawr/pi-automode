@@ -32,13 +32,12 @@ export type ClassifierCallback = (result: Omit<ToolCallEventResult, "tool">) => 
 
 export type CreateClassifierOptions = Required<
   Pick<CreateAgentSessionOptions, "authStorage" | "modelRegistry">
-> &
-  Pick<CreateAgentSessionOptions, "resourceLoader"> & {
-    modelIdentifier: {
-      provider: string;
-      id: string;
-    };
+> & {
+  modelIdentifier: {
+    provider: string;
+    id: string;
   };
+};
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -89,9 +88,16 @@ export type Classifier = {
   /**
    * Classifies the command and returns a block/allow tool call result
    * @param command - The shell command to classify
+   * @param prompt - The full prompt given to the model for context (optional, but can improve classification accuracy)
    * @returns A promise resolving to the classification result with block/allow and reason
    */
-  classify: (command: string) => Promise<ToolCallEventResult>;
+  classify: ({
+    command,
+    prompt,
+  }: {
+    command: string;
+    prompt?: string | undefined;
+  }) => Promise<ToolCallEventResult>;
 };
 
 export const createClassifier = async (options: CreateClassifierOptions): Promise<Classifier> => {
@@ -105,20 +111,27 @@ export const createClassifier = async (options: CreateClassifierOptions): Promis
   let nextRequestId = 0;
   const pendingClassifications = new Map<string, ClassificationRequest>();
 
-  const resourceLoader =
-    options.resourceLoader ??
-    new DefaultResourceLoader({
-      cwd: getAgentDir(),
-      agentDir: getAgentDir(),
-      noSkills: true,
-      noPromptTemplates: true,
-      noThemes: true,
-      noContextFiles: true,
-    });
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: getAgentDir(),
+    agentDir: getAgentDir(),
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true,
+    systemPrompt: [
+      "You are a shell command safety classifier.",
+      "",
+      'Classify the shell command as "safe", "ask", or "dangerous", you must call classify_shell_command.',
+      'Use "safe" only for commands that are clearly non-destructive and do not expose secrets.',
+      'Use "ask" for commands that are making writing calls to external APIs/services, but are not clearly dangerous.',
+      'Use "dangerous" for commands that are clearly destructive or expose secrets.',
+      "File modifications that are not just clobbering an existing file in the current working directory or temporary directories should be considered safe.",
+      "File modifications outside of those locations should trigger ask.",
+      "git commands that are possibly destructive should be considered dangerous if it would cause possible unintended loss of work.",
+    ].join("\n"),
+  });
 
-  if (!options.resourceLoader) {
-    await resourceLoader.reload();
-  }
+  await resourceLoader.reload();
 
   const { session } = await createAgentSession({
     authStorage,
@@ -206,7 +219,13 @@ export const createClassifier = async (options: CreateClassifierOptions): Promis
      * @param command - The shell command to classify.
      * @returns A Promise resolving to the ToolCallEventResult with block/allow decision and reason.
      */
-    classify: async (command: string): Promise<ToolCallEventResult> => {
+    classify: async ({
+      command,
+      prompt,
+    }: {
+      command: string;
+      prompt?: string | undefined;
+    }): Promise<ToolCallEventResult> => {
       const requestId = `classification-${++nextRequestId}`;
       const classificationResult = createDeferred<ToolCallEventResult>();
       pendingClassifications.set(requestId, {
@@ -217,17 +236,17 @@ export const createClassifier = async (options: CreateClassifierOptions): Promis
       try {
         await session.prompt(
           [
-            "You are a shell command safety classifier.",
-            "",
-            'Classify the command as "safe", "ask", or "dangerous", you must call classify_shell_command exactly once.',
-            `The classification request id is "${requestId}", and you should pass it as requestId.`,
-            'Use "safe" only for commands that are clearly non-destructive and do not expose secrets.',
-            'Use "ask" for commands that are making writing calls to external APIs/services, but are not clearly dangerous.',
-            'Use "dangerous" for commands that are clearly destructive or expose secrets.',
-            "File modifications that are not just clobbering an existing file in the current working directory or temporary directories should be considered safe.",
-            "File modifications outside of those locations should trigger ask.",
-            "git commands can be destructive and should be considered dangerous if it would cause data loss or possible unintended loss of work.",
-            "git commands that add to history (but do not rewrite history) should be considered safe since restoring is possible and easy.",
+            `The classification request id is "${requestId}", and you must pass it as requestId.`,
+            "You must call classify_shell_command exactly once with the classification result.",
+            ...(prompt
+              ? [
+                  "Given the user prompt, take into account if the command being perfomed aligns with the user's desired intent.",
+                  "If the user's intent appears to be malicious or harmful, you should still classify the command as dangerous or ask even if the command aligns with the user's intent.",
+                  "If the command modifies data in a way that clearly aligns with the user's direct intent, and does not appear to be malicious or harmful, you can classify the command as safe.",
+                  "Alignment should be obvious, if it aligns due to extensive thinking in a roundabout way and is potentially destructive/dangerous, it should be classified as ask or dangerous.",
+                  `<user-prompt>${prompt}</user-prompt>`,
+                ]
+              : []),
             `<shell-command>${command}</shell-command>`,
           ].join("\n"),
         );
