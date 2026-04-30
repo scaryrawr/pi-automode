@@ -32,7 +32,7 @@ const userPrompt = (content: UserMessage["content"]): string => {
 };
 
 export default async function (pi: ExtensionAPI) {
-  let selectedModelIdentifier: ModelIdentifier | undefined;
+  let activeAutoModel: ModelIdentifier | undefined;
   let classifier: Promise<Classifier> | undefined;
 
   /**
@@ -62,14 +62,14 @@ export default async function (pi: ExtensionAPI) {
    * @throws If classifier creation fails.
    */
   const getClassifier = async (ctx: ClassifierContext): Promise<Classifier> => {
-    if (!selectedModelIdentifier) {
+    if (!activeAutoModel) {
       throw new Error("Cannot find usable model");
     }
 
     classifier ??= createClassifier({
       authStorage: ctx.modelRegistry.authStorage,
       modelRegistry: ctx.modelRegistry,
-      modelIdentifier: selectedModelIdentifier,
+      modelIdentifier: activeAutoModel,
     });
 
     try {
@@ -81,7 +81,7 @@ export default async function (pi: ExtensionAPI) {
   };
 
   pi.on("session_start", async () => {
-    selectedModelIdentifier = getClassifierModelIdentifier();
+    activeAutoModel = getClassifierModelIdentifier();
   });
 
   pi.on("session_shutdown", async () => {
@@ -129,10 +129,13 @@ export default async function (pi: ExtensionAPI) {
       }
 
       let selected: Model<any> | undefined;
+      const currentModel = activeAutoModel
+        ? ctx.modelRegistry.find(activeAutoModel.provider, activeAutoModel.id)
+        : undefined;
 
       const result = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
         const component = new ModelSelectorComponent(tui, theme, {
-          currentModel: ctx.model,
+          currentModel,
           modelRegistry: ctx.modelRegistry,
           onSelect: (model: Model<any>) => {
             selected = model;
@@ -154,12 +157,12 @@ export default async function (pi: ExtensionAPI) {
       });
 
       if (result && selected) {
-        selectedModelIdentifier = {
+        activeAutoModel = {
           provider: selected.provider,
           id: selected.id,
         };
 
-        persistClassifierModelIdentifier(selectedModelIdentifier);
+        persistClassifierModelIdentifier(activeAutoModel);
         await disposeClassifier();
 
         ctx.ui.notify(
