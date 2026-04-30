@@ -191,7 +191,7 @@ export const createClassifier = async (options: CreateClassifierOptions): Promis
       throw Error("Model not found");
     }
 
-    session.setModel(model);
+    await session.setModel(model);
     return session;
   };
 
