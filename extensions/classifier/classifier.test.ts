@@ -9,7 +9,7 @@ const classifier = createClassifier({
   modelRegistry,
   modelIdentifier: {
     provider: "lmstudio",
-    id: "qwen3.5-4b-mxfp8",
+    id: "qwen3.5-4b",
   },
 });
 
