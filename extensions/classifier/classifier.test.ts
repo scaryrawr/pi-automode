@@ -1,5 +1,5 @@
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
-import { afterAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createClassifier } from "./classifier.js";
 
 const authStorage = AuthStorage.create();
@@ -15,10 +15,6 @@ const classifier = createClassifier({
 
 const runClassification = async (command: string, prompt?: string) =>
   (await classifier).classify({ command, prompt });
-
-afterAll(async () => {
-  (await classifier).dispose();
-});
 
 describe("when classifying safe git commands with the real model", () => {
   it("should be fine for `git log`", async () => {

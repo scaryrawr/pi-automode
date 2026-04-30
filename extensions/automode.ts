@@ -9,8 +9,7 @@ import {
   getClassifierModelIdentifier,
   persistClassifierModelIdentifier,
 } from "./automode/config.js";
-import type { ModelIdentifier } from "./automode/types.js";
-import { type Classifier, createClassifier } from "./classifier/classifier.js";
+import { createClassifier } from "./classifier/classifier.js";
 import { ModelSelectorComponent } from "./ui/model-selector.js";
 
 type ClassifierContext = Pick<ExtensionContext, "modelRegistry">;
@@ -32,61 +31,27 @@ const userPrompt = (content: UserMessage["content"]): string => {
 };
 
 export default async function (pi: ExtensionAPI) {
-  let activeAutoModel: ModelIdentifier | undefined;
-  let classifier: Promise<Classifier> | undefined;
+  let activeAutoModel = getClassifierModelIdentifier();
 
   /**
-   * Disposes the current classifier instance, if one exists.
-   * Resets the classifier promise to allow recreation on next use.
-   */
-  const disposeClassifier = async () => {
-    const classifierToDispose = classifier;
-    classifier = undefined;
-
-    if (!classifierToDispose) {
-      return;
-    }
-
-    try {
-      (await classifierToDispose).dispose();
-    } catch {
-      // Ignore classifier startup/disposal errors here. Tool-call handling reports creation failures.
-    }
-  };
-
-  /**
-   * Gets the classifier instance, creating it lazily if it doesn't exist.
-   * Clears the cached classifier on error to allow retry on next call.
+   * Creates a classifier instance for the current model.
    * @param ctx - The classifier context containing the model registry.
-   * @returns The resolved classifier instance.
+   * @returns The classifier instance.
    * @throws If classifier creation fails.
    */
-  const getClassifier = async (ctx: ClassifierContext): Promise<Classifier> => {
+  const getClassifier = async (
+    ctx: ClassifierContext,
+  ): Promise<ReturnType<typeof createClassifier>> => {
     if (!activeAutoModel) {
       throw new Error("Cannot find usable model");
     }
 
-    classifier ??= createClassifier({
+    return createClassifier({
       authStorage: ctx.modelRegistry.authStorage,
       modelRegistry: ctx.modelRegistry,
       modelIdentifier: activeAutoModel,
     });
-
-    try {
-      return await classifier;
-    } catch (error) {
-      classifier = undefined;
-      throw error;
-    }
   };
-
-  pi.on("session_start", async () => {
-    activeAutoModel = getClassifierModelIdentifier();
-  });
-
-  pi.on("session_shutdown", async () => {
-    await disposeClassifier();
-  });
 
   pi.on("tool_call", async (event, ctx): Promise<ToolCallEventResult> => {
     // Allow all non-bash tools by default
@@ -163,7 +128,6 @@ export default async function (pi: ExtensionAPI) {
         };
 
         persistClassifierModelIdentifier(activeAutoModel);
-        await disposeClassifier();
 
         ctx.ui.notify(
           `Auto mode classifier model set to ${selected.id} [${selected.provider}]`,

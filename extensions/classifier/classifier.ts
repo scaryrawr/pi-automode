@@ -1,4 +1,8 @@
-import type { CreateAgentSessionOptions, ToolCallEventResult } from "@mariozechner/pi-coding-agent";
+import type {
+  AgentSession,
+  CreateAgentSessionOptions,
+  ToolCallEventResult,
+} from "@mariozechner/pi-coding-agent";
 import {
   createAgentSession,
   createReadToolDefinition,
@@ -14,9 +18,6 @@ import { isSafeCommand } from "./safe-command.js";
 /** Result schema for the classify_shell_command tool, indicating if the command is safe to run and the reason if not. */
 export const classifyResultSchema = Type.Object(
   {
-    requestId: Type.String({
-      description: "The classification request id exactly as provided by the prompt",
-    }),
     classification: Type.Enum(["safe", "ask", "dangerous"]),
     reason: Type.Optional(
       Type.String({
@@ -84,9 +85,6 @@ const createDeferred = <T>(): Deferred<T> => {
 };
 
 export type Classifier = {
-  /** Disposes the classifier */
-  dispose: () => void;
-
   /**
    * Classifies the command and returns a block/allow tool call result
    * @param command - The shell command to classify
@@ -104,14 +102,6 @@ export type Classifier = {
 
 export const createClassifier = async (options: CreateClassifierOptions): Promise<Classifier> => {
   const { authStorage, modelRegistry, modelIdentifier } = options;
-
-  type ClassificationRequest = {
-    command: string;
-    result: Deferred<ToolCallEventResult>;
-  };
-
-  let nextRequestId = 0;
-  const pendingClassifications = new Map<string, ClassificationRequest>();
 
   const resourceLoader = new DefaultResourceLoader({
     cwd: getAgentDir(),
@@ -136,92 +126,82 @@ export const createClassifier = async (options: CreateClassifierOptions): Promis
 
   await resourceLoader.reload();
 
-  const readTool = defineTool(createReadToolDefinition(process.cwd()));
-  const { session } = await createAgentSession({
-    authStorage,
-    modelRegistry,
-    sessionManager: SessionManager.inMemory(),
-    settingsManager: SettingsManager.inMemory(),
-    resourceLoader,
-    tools: ["classify_shell_command", readTool.name],
-    thinkingLevel: "low",
-    customTools: [
-      defineTool({
-        name: "classify_shell_command",
-        label: "Shell call classifier",
-        description: "Classify a shell tool as safe, ask, or dangerous to run.",
-        parameters: classifyResultSchema,
-        /**
-         * Handles the classify_shell_command tool call by resolving the matching pending classification.
-         * @param _toolCallId - The tool call ID (unused).
-         * @param params - The classification result params from the AI model.
-         * @param _signal - Abort signal (unused).
-         * @param _onUpdate - Update callback (unused).
-         * @param _ctx - Tool context (unused).
-         * @returns The tool call result with classification details.
-         */
-        execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-          const pendingClassification = pendingClassifications.get(params.requestId);
-          if (!pendingClassification) {
-            throw new Error(
-              "Could not find pending classification for requestId: " + params.requestId,
-            );
-          }
-          const classificationReason =
-            typeof params.reason === "string" ? params.reason : undefined;
+  /**
+   * Creates a fresh in-memory agent session for a single classification call.
+   * Using a new session per call keeps the system prompt at the stable prompt-prefix,
+   * which maximizes cache hit rates with providers that support prompt caching.
+   */
+  const createSession = async (
+    classificationResult: Deferred<ToolCallEventResult>,
+  ): Promise<AgentSession> => {
+    const readTool = defineTool(createReadToolDefinition(process.cwd()));
+    const { session } = await createAgentSession({
+      authStorage,
+      modelRegistry,
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory(),
+      resourceLoader,
+      tools: ["classify_shell_command", readTool.name],
+      thinkingLevel: "low",
+      customTools: [
+        defineTool({
+          name: "classify_shell_command",
+          label: "Shell call classifier",
+          description: "Classify a shell tool as safe, ask, or dangerous to run.",
+          parameters: classifyResultSchema,
+          /**
+           * Handles the classify_shell_command tool call by resolving the current classification.
+           * @param _toolCallId - The tool call ID (unused).
+           * @param params - The classification result params from the AI model.
+           * @param _signal - Abort signal (unused).
+           * @param _onUpdate - Update callback (unused).
+           * @param _ctx - Tool context (unused).
+           * @returns The tool call result with classification details.
+           */
+          execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
+            const classificationReason =
+              typeof params.reason === "string" ? params.reason : undefined;
 
-          if (!pendingClassification) {
+            switch (params.classification) {
+              case "safe":
+                classificationResult.resolve({ block: false });
+                break;
+              default:
+                classificationResult.resolve({
+                  block: true,
+                  reason:
+                    classificationReason ?? `Classifier marked command as ${params.classification}`,
+                });
+            }
+
             return {
               content: [],
               details: {
                 classification: params.classification,
-                reason: "No pending classification request matched the tool call",
+                reason: classificationReason,
               },
             };
-          }
+          },
+        }),
+        readTool,
+      ],
+    });
 
-          switch (params.classification) {
-            case "safe":
-              pendingClassification.result.resolve({ block: false });
-              break;
-            default:
-              pendingClassification.result.resolve({
-                block: true,
-                reason:
-                  classificationReason ?? `Classifier marked command as ${params.classification}`,
-              });
-          }
+    const model = session.modelRegistry.find(modelIdentifier.provider, modelIdentifier.id);
+    if (!model) {
+      session.dispose();
+      throw Error("Model not found");
+    }
 
-          return {
-            content: [],
-            details: {
-              classification: params.classification,
-              reason: classificationReason,
-            },
-          };
-        },
-      }),
-      readTool,
-    ],
-  });
-
-  const model = session.modelRegistry.find(modelIdentifier.provider, modelIdentifier.id);
-  if (!model) {
-    throw Error("Model not found");
-  }
-
-  session.setModel(model);
+    session.setModel(model);
+    return session;
+  };
 
   return {
     /**
-     * Disposes the classifier's underlying agent session, freeing resources.
-     */
-    dispose() {
-      session.dispose();
-    },
-    /**
      * Classifies a shell command as safe, ask, or dangerous using an AI agent.
      * Submits the command to the classifier model and waits for the classification result.
+     * Creates a fresh session per call for optimal prompt cache hits.
      * @param command - The shell command to classify.
      * @returns A Promise resolving to the ToolCallEventResult with block/allow decision and reason.
      */
@@ -237,17 +217,13 @@ export const createClassifier = async (options: CreateClassifierOptions): Promis
         return { block: false };
       }
 
-      const requestId = `classification-${++nextRequestId}`;
       const classificationResult = createDeferred<ToolCallEventResult>();
-      pendingClassifications.set(requestId, {
-        command,
-        result: classificationResult,
-      });
 
+      let session: AgentSession | undefined;
       try {
+        session = await createSession(classificationResult);
         await session.prompt(
           [
-            `The classification request id is "${requestId}", and you must pass it as requestId.`,
             "You must call classify_shell_command exactly once with the classification result.",
             ...(prompt
               ? [
@@ -276,7 +252,7 @@ export const createClassifier = async (options: CreateClassifierOptions): Promis
           reason: error instanceof Error ? error.message : String(error),
         };
       } finally {
-        pendingClassifications.delete(requestId);
+        session?.dispose();
       }
     },
   };
