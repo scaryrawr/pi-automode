@@ -128,8 +128,6 @@ export const createClassifier = async (options: CreateClassifierOptions): Promis
 
   /**
    * Creates a fresh in-memory agent session for a single classification call.
-   * Using a new session per call keeps the system prompt at the stable prompt-prefix,
-   * which maximizes cache hit rates with providers that support prompt caching.
    */
   const createSession = async (
     classificationResult: Deferred<ToolCallEventResult>,
@@ -201,7 +199,7 @@ export const createClassifier = async (options: CreateClassifierOptions): Promis
     /**
      * Classifies a shell command as safe, ask, or dangerous using an AI agent.
      * Submits the command to the classifier model and waits for the classification result.
-     * Creates a fresh session per call for optimal prompt cache hits.
+     * Creates a fresh session per call.
      * @param command - The shell command to classify.
      * @returns A Promise resolving to the ToolCallEventResult with block/allow decision and reason.
      */
