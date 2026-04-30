@@ -9,6 +9,7 @@ import {
   SettingsManager,
 } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
+import { isSafeCommand } from "./safe-command.js";
 
 /** Result schema for the classify_shell_command tool, indicating if the command is safe to run and the reason if not. */
 export const classifyResultSchema = Type.Object(
@@ -231,6 +232,11 @@ export const createClassifier = async (options: CreateClassifierOptions): Promis
       command: string;
       prompt?: string | undefined;
     }): Promise<ToolCallEventResult> => {
+      // Short-circuit: known safe commands don't need LLM classification
+      if (isSafeCommand(command)) {
+        return { block: false };
+      }
+
       const requestId = `classification-${++nextRequestId}`;
       const classificationResult = createDeferred<ToolCallEventResult>();
       pendingClassifications.set(requestId, {
