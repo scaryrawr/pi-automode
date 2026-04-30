@@ -1,3 +1,4 @@
+import type { Model } from "@mariozechner/pi-ai";
 import {
   type ExtensionAPI,
   type ExtensionContext,
@@ -10,6 +11,7 @@ import {
 } from "./automode/config.js";
 import type { ModelIdentifier } from "./automode/types.js";
 import { type Classifier, createClassifier } from "./classifier/classifier.js";
+import { ModelSelectorComponent } from "./ui/model-selector.js";
 
 type ClassifierContext = Pick<ExtensionContext, "modelRegistry">;
 
@@ -95,24 +97,50 @@ export default async function (pi: ExtensionAPI) {
      * @param ctx - The extension context with model registry and UI access.
      */
     handler: async (_args, ctx) => {
-      const models = ctx.modelRegistry.getAvailable();
-      const normalize = (m: (typeof models)[number]) => `${m.id} [${m.provider}]`;
-      const modelSelection = await ctx.ui.select("Select auto mode model", models.map(normalize));
-
-      const model = models.find((m) => normalize(m) === modelSelection);
-      if (!model) {
+      if (!ctx.hasUI) {
+        ctx.ui.notify("Auto mode model selection requires an interactive UI", "warning");
         return;
       }
 
-      selectedModelIdentifier = {
-        provider: model.provider,
-        id: model.id,
-      };
+      let selected: Model<any> | undefined;
 
-      persistClassifierModelIdentifier(selectedModelIdentifier);
-      await disposeClassifier();
+      const result = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+        const component = new ModelSelectorComponent(tui, theme, {
+          currentModel: ctx.model,
+          modelRegistry: ctx.modelRegistry,
+          onSelect: (model: Model<any>) => {
+            selected = model;
+            done(model.id);
+          },
+          onCancel: () => {
+            done(null);
+          },
+        });
 
-      ctx.ui.notify(`Auto mode classifier model set to ${model.id} [${model.provider}]`, "info");
+        return {
+          render: (w: number) => component.render(w),
+          invalidate: () => component.invalidate(),
+          handleInput: (data: string) => {
+            component.handleInput(data);
+            tui.requestRender();
+          },
+        };
+      });
+
+      if (result && selected) {
+        selectedModelIdentifier = {
+          provider: selected.provider,
+          id: selected.id,
+        };
+
+        persistClassifierModelIdentifier(selectedModelIdentifier);
+        await disposeClassifier();
+
+        ctx.ui.notify(
+          `Auto mode classifier model set to ${selected.id} [${selected.provider}]`,
+          "info",
+        );
+      }
     },
   });
 }
