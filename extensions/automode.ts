@@ -5,13 +5,11 @@ import {
   isToolCallEventType,
 } from "@mariozechner/pi-coding-agent";
 import {
-  loadClassifierModelIdentifier,
+  getClassifierModelIdentifier,
   persistClassifierModelIdentifier,
 } from "./automode/config.js";
 import type { ModelIdentifier } from "./automode/types.js";
-import { createClassifier } from "./classifier/classifier.js";
-
-type Classifier = Awaited<ReturnType<typeof createClassifier>>;
+import { type Classifier, createClassifier } from "./classifier/classifier.js";
 
 type ClassifierContext = Pick<ExtensionContext, "modelRegistry">;
 
@@ -19,11 +17,10 @@ export default async function (pi: ExtensionAPI) {
   let selectedModelIdentifier: ModelIdentifier | undefined;
   let classifier: Promise<Classifier> | undefined;
 
-  const getSelectedModelIdentifier = () => {
-    selectedModelIdentifier ??= loadClassifierModelIdentifier();
-    return selectedModelIdentifier;
-  };
-
+  /**
+   * Disposes the current classifier instance, if one exists.
+   * Resets the classifier promise to allow recreation on next use.
+   */
   const disposeClassifier = async () => {
     const classifierToDispose = classifier;
     classifier = undefined;
@@ -39,28 +36,22 @@ export default async function (pi: ExtensionAPI) {
     }
   };
 
-  const resolveClassifierModelIdentifier = (ctx: ClassifierContext) => {
-    const configuredModelIdentifier = getSelectedModelIdentifier();
-    if (!configuredModelIdentifier) {
-      throw new Error(
-        "No automode classifier model configured. Run /automodel to select one.",
-      );
+  /**
+   * Gets the classifier instance, creating it lazily if it doesn't exist.
+   * Clears the cached classifier on error to allow retry on next call.
+   * @param ctx - The classifier context containing the model registry.
+   * @returns The resolved classifier instance.
+   * @throws If classifier creation fails.
+   */
+  const getClassifier = async (ctx: ClassifierContext): Promise<Classifier> => {
+    if (!selectedModelIdentifier) {
+      throw new Error("Cannot find usable model");
     }
 
-    if (ctx.modelRegistry.find(configuredModelIdentifier.provider, configuredModelIdentifier.id)) {
-      return configuredModelIdentifier;
-    }
-
-    throw new Error(
-      `Classifier model ${configuredModelIdentifier.id} [${configuredModelIdentifier.provider}] is not available`,
-    );
-  };
-
-  const getClassifier = async (ctx: ClassifierContext) => {
     classifier ??= createClassifier({
       authStorage: ctx.modelRegistry.authStorage,
       modelRegistry: ctx.modelRegistry,
-      modelIdentifier: resolveClassifierModelIdentifier(ctx),
+      modelIdentifier: selectedModelIdentifier,
     });
 
     try {
@@ -72,7 +63,7 @@ export default async function (pi: ExtensionAPI) {
   };
 
   pi.on("session_start", async () => {
-    selectedModelIdentifier = loadClassifierModelIdentifier();
+    selectedModelIdentifier = getClassifierModelIdentifier();
   });
 
   pi.on("session_shutdown", async () => {
@@ -97,6 +88,12 @@ export default async function (pi: ExtensionAPI) {
 
   pi.registerCommand("automodel", {
     description: "Set the model for auto mode bash evaluation",
+    /**
+     * Command handler for /automodel - prompts the user to select a model for auto mode bash evaluation.
+     * Persists the selection and notifies the user of the result.
+     * @param _args - Command arguments (unused).
+     * @param ctx - The extension context with model registry and UI access.
+     */
     handler: async (_args, ctx) => {
       const models = ctx.modelRegistry.getAvailable();
       const normalize = (m: (typeof models)[number]) => `${m.id} [${m.provider}]`;
@@ -112,18 +109,8 @@ export default async function (pi: ExtensionAPI) {
         id: model.id,
       };
 
-      const settingsErrors = persistClassifierModelIdentifier(selectedModelIdentifier);
+      persistClassifierModelIdentifier(selectedModelIdentifier);
       await disposeClassifier();
-
-      if (settingsErrors.length > 0) {
-        ctx.ui.notify(
-          `Auto mode model selected, but failed to persist settings: ${settingsErrors
-            .map(({ scope, error }) => `${scope}: ${error.message}`)
-            .join("; ")}`,
-          "error",
-        );
-        return;
-      }
 
       ctx.ui.notify(`Auto mode classifier model set to ${model.id} [${model.provider}]`, "info");
     },

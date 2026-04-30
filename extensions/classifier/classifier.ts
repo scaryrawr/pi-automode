@@ -9,15 +9,11 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 
+/** Result schema for the classify_shell_command tool, indicating if the command is safe to run and the reason if not. */
 export const classifyResultSchema = Type.Object(
   {
-    requestId: Type.Optional(
-      Type.String({
-        description: "The classification request id exactly as provided by the prompt",
-      }),
-    ),
-    command: Type.String({
-      description: "The original command being classified",
+    requestId: Type.String({
+      description: "The classification request id exactly as provided by the prompt",
     }),
     classification: Type.Enum(["safe", "ask", "dangerous"]),
     reason: Type.Optional(
@@ -51,6 +47,11 @@ type Deferred<T> = {
   reject: (reason: unknown) => void;
 };
 
+/**
+ * Creates a deferred promise that can be resolved or rejected externally.
+ * @typeparam T - The type of the deferred value.
+ * @returns A deferred object with promise, resolve, reject, and settled properties.
+ */
 const createDeferred = <T>(): Deferred<T> => {
   let settled = false;
   let resolvePromise!: (value: T | PromiseLike<T>) => void;
@@ -81,7 +82,19 @@ const createDeferred = <T>(): Deferred<T> => {
   };
 };
 
-export const createClassifier = async (options: CreateClassifierOptions) => {
+export type Classifier = {
+  /** Disposes the classifier */
+  dispose: () => void;
+
+  /**
+   * Classifies the command and returns a block/allow tool call result
+   * @param command - The shell command to classify
+   * @returns A promise resolving to the classification result with block/allow and reason
+   */
+  classify: (command: string) => Promise<ToolCallEventResult>;
+};
+
+export const createClassifier = async (options: CreateClassifierOptions): Promise<Classifier> => {
   const { authStorage, modelRegistry, modelIdentifier } = options;
 
   type ClassificationRequest = {
@@ -91,21 +104,6 @@ export const createClassifier = async (options: CreateClassifierOptions) => {
 
   let nextRequestId = 0;
   const pendingClassifications = new Map<string, ClassificationRequest>();
-
-  const findPendingClassification = (params: {
-    requestId?: string | undefined;
-    command: string;
-  }) => {
-    if (params.requestId) {
-      return pendingClassifications.get(params.requestId);
-    }
-
-    const matchingRequests = Array.from(pendingClassifications.values()).filter(
-      (request) => request.command === params.command,
-    );
-
-    return matchingRequests.length === 1 ? matchingRequests[0] : undefined;
-  };
 
   const resourceLoader =
     options.resourceLoader ??
@@ -135,8 +133,22 @@ export const createClassifier = async (options: CreateClassifierOptions) => {
         label: "Shell call classifier",
         description: "Classify a shell tool as safe, ask, or dangerous to run.",
         parameters: classifyResultSchema,
+        /**
+         * Handles the classify_shell_command tool call by resolving the matching pending classification.
+         * @param _toolCallId - The tool call ID (unused).
+         * @param params - The classification result params from the AI model.
+         * @param _signal - Abort signal (unused).
+         * @param _onUpdate - Update callback (unused).
+         * @param _ctx - Tool context (unused).
+         * @returns The tool call result with classification details.
+         */
         execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-          const pendingClassification = findPendingClassification(params);
+          const pendingClassification = pendingClassifications.get(params.requestId);
+          if (!pendingClassification) {
+            throw new Error(
+              "Could not find pending classification for requestId: " + params.requestId,
+            );
+          }
           const classificationReason =
             typeof params.reason === "string" ? params.reason : undefined;
 
@@ -182,9 +194,18 @@ export const createClassifier = async (options: CreateClassifierOptions) => {
   session.setModel(model);
 
   return {
+    /**
+     * Disposes the classifier's underlying agent session, freeing resources.
+     */
     dispose() {
       session.dispose();
     },
+    /**
+     * Classifies a shell command as safe, ask, or dangerous using an AI agent.
+     * Submits the command to the classifier model and waits for the classification result.
+     * @param command - The shell command to classify.
+     * @returns A Promise resolving to the ToolCallEventResult with block/allow decision and reason.
+     */
     classify: async (command: string): Promise<ToolCallEventResult> => {
       const requestId = `classification-${++nextRequestId}`;
       const classificationResult = createDeferred<ToolCallEventResult>();
