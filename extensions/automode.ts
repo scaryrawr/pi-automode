@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model, UserMessage } from "@mariozechner/pi-ai";
 import {
   type ExtensionAPI,
   type ExtensionContext,
@@ -14,6 +14,22 @@ import { type Classifier, createClassifier } from "./classifier/classifier.js";
 import { ModelSelectorComponent } from "./ui/model-selector.js";
 
 type ClassifierContext = Pick<ExtensionContext, "modelRegistry">;
+
+/**
+ * Convert user message content to plain text for classifier input.
+ * @param content - The content of a user message, which can be a string or an array of text/image blocks.
+ * @returns The extracted plain text from the user message content, concatenating text blocks if necessary.
+ */
+const userPrompt = (content: UserMessage["content"]): string => {
+  if (typeof content === "string") {
+    return content;
+  }
+
+  return content
+    .filter((b) => b.type === "text")
+    .map((b) => b.text)
+    .join("\n");
+};
 
 export default async function (pi: ExtensionAPI) {
   let selectedModelIdentifier: ModelIdentifier | undefined;
@@ -79,7 +95,17 @@ export default async function (pi: ExtensionAPI) {
     }
 
     try {
-      return (await getClassifier(ctx)).classify(event.input.command);
+      const lastUserEntry = ctx.sessionManager
+        .getBranch()
+        .findLast((entry) => entry.type === "message" && entry.message.role === "user");
+      const prompt =
+        lastUserEntry?.type === "message" && lastUserEntry.message.role === "user"
+          ? userPrompt(lastUserEntry.message.content)
+          : undefined;
+      return (await getClassifier(ctx)).classify({
+        prompt,
+        command: event.input.command,
+      });
     } catch (error) {
       return {
         block: true,
