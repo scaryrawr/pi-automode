@@ -7,6 +7,8 @@
   "type": "module",
   "scripts": {
     "build": "tsgo -p ./tsconfig.json",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check",
     "lint": "oxlint -c .oxlintrc.json --tsconfig ./tsconfig.json ./extensions/*.ts ./extensions/**/*.ts",
     "lint:fix": "oxlint -c .oxlintrc.json --fix --tsconfig ./tsconfig.json ./extensions/*.ts ./extensions/**/*.ts",
     "test": "vitest"
@@ -17,6 +19,7 @@
   "devDependencies": {
     "@mariozechner/pi-coding-agent": "^0.70.6",
     "@typescript/native-preview": "^7.0.0-dev.20260428.1",
+    "oxfmt": "^0.47.0",
     "oxlint": "^1.62.0",
     "oxlint-tsgolint": "^0.22.1",
     "typebox": "^1.1.34",

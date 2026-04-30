@@ -1,7 +1,9 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+
 import { getAgentDir, SettingsManager } from "@mariozechner/pi-coding-agent";
 import { z } from "zod";
+
 import { type ModelIdentifier, modelIdentifierSchema } from "./types.js";
 
 const CONFIG_FILE_NAME = "automode.json";

@@ -13,6 +13,7 @@ import {
   SettingsManager,
 } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
+
 import { isSafeCommand } from "./safe-command.js";
 
 /** Result schema for the classify_shell_command tool, indicating if the command is safe to run and the reason if not. */
