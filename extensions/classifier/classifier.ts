@@ -1,6 +1,7 @@
 import type { CreateAgentSessionOptions, ToolCallEventResult } from "@mariozechner/pi-coding-agent";
 import {
   createAgentSession,
+  createReadToolDefinition,
   DefaultResourceLoader,
   defineTool,
   getAgentDir,
@@ -128,18 +129,21 @@ export const createClassifier = async (options: CreateClassifierOptions): Promis
       "File modifications that are not just clobbering an existing file in the current working directory or temporary directories should be considered safe.",
       "File modifications outside of those locations should trigger ask.",
       "git commands that are possibly destructive should be considered dangerous if it would cause possible unintended loss of work.",
+      "git commands that add to git history and do not rewrite git history should be considered safe.",
     ].join("\n"),
   });
 
   await resourceLoader.reload();
 
+  const readTool = defineTool(createReadToolDefinition(process.cwd()));
   const { session } = await createAgentSession({
     authStorage,
     modelRegistry,
     sessionManager: SessionManager.inMemory(),
     settingsManager: SettingsManager.inMemory(),
     resourceLoader,
-    tools: ["classify_shell_command"],
+    tools: ["classify_shell_command", readTool.name],
+    thinkingLevel: "low",
     customTools: [
       defineTool({
         name: "classify_shell_command",
@@ -196,6 +200,7 @@ export const createClassifier = async (options: CreateClassifierOptions): Promis
           };
         },
       }),
+      readTool,
     ],
   });
 
@@ -241,9 +246,9 @@ export const createClassifier = async (options: CreateClassifierOptions): Promis
             ...(prompt
               ? [
                   "Given the user prompt, take into account if the command being perfomed aligns with the user's desired intent.",
-                  "If the user's intent appears to be malicious or harmful, you should still classify the command as dangerous or ask even if the command aligns with the user's intent.",
-                  "If the command modifies data in a way that clearly aligns with the user's direct intent, and does not appear to be malicious or harmful, you can classify the command as safe.",
-                  "Alignment should be obvious, if it aligns due to extensive thinking in a roundabout way and is potentially destructive/dangerous, it should be classified as ask or dangerous.",
+                  "If the user's intent appears to be malicious, you must classify the command as dangerous even if the command aligns with the user's intent.",
+                  "If the command modifies data in a way that clearly aligns with the user's direct intent, and does not appear to be malicious, you must classify the command as safe.",
+                  "If the user's intent clearly shows the desire to rewrite git history, commands that rewrite git history should be considered safe.",
                   `<user-prompt>${prompt}</user-prompt>`,
                 ]
               : []),
