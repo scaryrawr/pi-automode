@@ -1,4 +1,4 @@
-import type { Model, UserMessage } from "@mariozechner/pi-ai";
+import type { Api, Model, UserMessage } from "@mariozechner/pi-ai";
 import {
   type ExtensionAPI,
   type ExtensionContext,
@@ -93,7 +93,7 @@ export default async function (pi: ExtensionAPI) {
         return;
       }
 
-      let selected: Model<any> | undefined;
+      let selected: Model<Api> | undefined;
       const currentModel = activeAutoModel
         ? ctx.modelRegistry.find(activeAutoModel.provider, activeAutoModel.id)
         : undefined;
@@ -102,7 +102,7 @@ export default async function (pi: ExtensionAPI) {
         const component = new ModelSelectorComponent(tui, theme, {
           currentModel,
           modelRegistry: ctx.modelRegistry,
-          onSelect: (model: Model<any>) => {
+          onSelect: (model: Model<Api>) => {
             selected = model;
             done(model.id);
           },

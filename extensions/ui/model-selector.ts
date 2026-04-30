@@ -1,5 +1,5 @@
 // stolen from https://github.com/badlogic/pi-mono/blob/156a9052bc08a5ed08b7f2b82a27796253c4760d/packages/coding-agent/src/modes/interactive/components/model-selector.ts
-import { type Model, modelsAreEqual } from "@mariozechner/pi-ai";
+import { type Api, type Model, modelsAreEqual } from "@mariozechner/pi-ai";
 import {
   Container,
   type Focusable,
@@ -19,7 +19,7 @@ import { DynamicBorder } from "@mariozechner/pi-coding-agent";
 interface ModelItem {
   provider: string;
   id: string;
-  model: Model<any>;
+  model: Model<Api>;
 }
 
 /**
@@ -27,11 +27,11 @@ interface ModelItem {
  */
 export interface ModelSelectorOptions {
   /** The currently active model (highlighted with ✓). */
-  currentModel: Model<any> | undefined;
+  currentModel: Model<Api> | undefined;
   /** The model registry to load available models from. */
   modelRegistry: ModelRegistry;
   /** Callback when a model is selected. */
-  onSelect: (model: Model<any>) => void;
+  onSelect: (model: Model<Api>) => void;
   /** Callback when the user cancels. */
   onCancel: () => void;
   /** Pre-filled search string (optional). */
@@ -69,9 +69,9 @@ export class ModelSelectorComponent extends Container implements Focusable {
   private activeModels: ModelItem[] = [];
   private filteredModels: ModelItem[] = [];
   private selectedIndex: number = 0;
-  private currentModel: Model<any> | undefined;
+  private currentModel: Model<Api> | undefined;
   private modelRegistry: ModelRegistry;
-  private onSelectCallback: (model: Model<any>) => void;
+  private onSelectCallback: (model: Model<Api>) => void;
   private onCancelCallback: () => void;
   private errorMessage?: string;
   private tui: TUI;
@@ -150,7 +150,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
     // Load available models
     try {
       const availableModels = this.modelRegistry.getAvailable();
-      this.allModels = availableModels.map((model: Model<any>) => ({
+      this.allModels = availableModels.map((model: Model<Api>) => ({
         provider: model.provider,
         id: model.id,
         model,
@@ -300,7 +300,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
     }
   }
 
-  private handleSelect(model: Model<any>): void {
+  private handleSelect(model: Model<Api>): void {
     this.onSelectCallback(model);
   }
 
