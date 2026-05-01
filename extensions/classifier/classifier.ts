@@ -5,7 +5,6 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import {
   createAgentSession,
-  createReadToolDefinition,
   DefaultResourceLoader,
   defineTool,
   getAgentDir,
@@ -85,20 +84,20 @@ const createDeferred = <T>(): Deferred<T> => {
   };
 };
 
+export type ClassifyOptions = {
+  /** Command to classify */
+  command: string;
+  /** Last user prompt to provide additional context for classification (optional) */
+  prompt?: string | undefined;
+};
+
 export type Classifier = {
   /**
    * Classifies the command and returns a block/allow tool call result
-   * @param command - The shell command to classify
-   * @param prompt - The full prompt given to the model for context (optional, but can improve classification accuracy)
+   * @param params - The classification inputs
    * @returns A promise resolving to the classification result with block/allow and reason
    */
-  classify: ({
-    command,
-    prompt,
-  }: {
-    command: string;
-    prompt?: string | undefined;
-  }) => Promise<ToolCallEventResult>;
+  classify: (params: ClassifyOptions) => Promise<ToolCallEventResult>;
 };
 
 export const createClassifier = async (options: CreateClassifierOptions): Promise<Classifier> => {
@@ -133,14 +132,13 @@ export const createClassifier = async (options: CreateClassifierOptions): Promis
   const createSession = async (
     classificationResult: Deferred<ToolCallEventResult>,
   ): Promise<AgentSession> => {
-    const readTool = defineTool(createReadToolDefinition(process.cwd()));
     const { session } = await createAgentSession({
       authStorage,
       modelRegistry,
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory(),
       resourceLoader,
-      tools: ["classify_shell_command", readTool.name],
+      tools: ["classify_shell_command"],
       thinkingLevel: "low",
       customTools: [
         defineTool({
@@ -152,12 +150,11 @@ export const createClassifier = async (options: CreateClassifierOptions): Promis
            * Handles the classify_shell_command tool call by resolving the current classification.
            * @param _toolCallId - The tool call ID (unused).
            * @param params - The classification result params from the AI model.
-           * @param _signal - Abort signal (unused).
            * @param _onUpdate - Update callback (unused).
            * @param _ctx - Tool context (unused).
            * @returns The tool call result with classification details.
            */
-          execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
+          execute: async (_toolCallId, params, _onUpdate, _ctx) => {
             const classificationReason =
               typeof params.reason === "string" ? params.reason : undefined;
 
@@ -182,7 +179,6 @@ export const createClassifier = async (options: CreateClassifierOptions): Promis
             };
           },
         }),
-        readTool,
       ],
     });
 
@@ -201,16 +197,12 @@ export const createClassifier = async (options: CreateClassifierOptions): Promis
      * Classifies a shell command as safe, ask, or dangerous using an AI agent.
      * Submits the command to the classifier model and waits for the classification result.
      * Creates a fresh session per call.
-     * @param command - The shell command to classify.
      * @returns A Promise resolving to the ToolCallEventResult with block/allow decision and reason.
      */
     classify: async ({
       command,
       prompt,
-    }: {
-      command: string;
-      prompt?: string | undefined;
-    }): Promise<ToolCallEventResult> => {
+    }: ClassifyOptions): Promise<ToolCallEventResult> => {
       // Short-circuit: known safe commands don't need LLM classification
       if (isSafeCommand(command)) {
         return { block: false };
