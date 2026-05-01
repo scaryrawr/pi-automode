@@ -97,7 +97,7 @@ export type Classifier = {
    * @param params - The classification inputs
    * @returns A promise resolving to the classification result with block/allow and reason
    */
-  classify: (params: ClassifyOptions) => Promise<ToolCallEventResult>;
+  classify: (params: ClassifyOptions, signal?: AbortSignal) => Promise<ToolCallEventResult>;
 };
 
 export const createClassifier = async (options: CreateClassifierOptions): Promise<Classifier> => {
@@ -150,33 +150,48 @@ export const createClassifier = async (options: CreateClassifierOptions): Promis
            * Handles the classify_shell_command tool call by resolving the current classification.
            * @param _toolCallId - The tool call ID (unused).
            * @param params - The classification result params from the AI model.
+           * @param signal - Abort signal from the caller; check for abort to short-circuit.
            * @param _onUpdate - Update callback (unused).
            * @param _ctx - Tool context (unused).
            * @returns The tool call result with classification details.
            */
-          execute: async (_toolCallId, params, _onUpdate, _ctx) => {
-            const classificationReason =
-              typeof params.reason === "string" ? params.reason : undefined;
-
-            switch (params.classification) {
-              case "safe":
-                classificationResult.resolve({ block: false });
-                break;
-              default:
-                classificationResult.resolve({
-                  block: true,
-                  reason:
-                    classificationReason ?? `Classifier marked command as ${params.classification}`,
-                });
-            }
-
-            return {
-              content: [],
-              details: {
-                classification: params.classification,
-                reason: classificationReason,
-              },
+          execute: async (_toolCallId, params, signal, _onUpdate, _ctx) => {
+            // If the caller has aborted, short-circuit classification
+            const abortClassification = () => {
+              classificationResult.reject(new Error("Classification cancelled"));
             };
+
+            signal?.addEventListener("abort", abortClassification, {
+              once: true,
+            });
+
+            try {
+              const classificationReason =
+                typeof params.reason === "string" ? params.reason : undefined;
+
+              switch (params.classification) {
+                case "safe":
+                  classificationResult.resolve({ block: false });
+                  break;
+                default:
+                  classificationResult.resolve({
+                    block: true,
+                    reason:
+                      classificationReason ??
+                      `Classifier marked command as ${params.classification}`,
+                  });
+              }
+
+              return {
+                content: [],
+                details: {
+                  classification: params.classification,
+                  reason: classificationReason,
+                },
+              };
+            } finally {
+              signal?.removeEventListener("abort", abortClassification);
+            }
           },
         }),
       ],
@@ -199,18 +214,22 @@ export const createClassifier = async (options: CreateClassifierOptions): Promis
      * Creates a fresh session per call.
      * @returns A Promise resolving to the ToolCallEventResult with block/allow decision and reason.
      */
-    classify: async ({
-      command,
-      prompt,
-    }: ClassifyOptions): Promise<ToolCallEventResult> => {
+    classify: async (
+      { command, prompt }: ClassifyOptions,
+      signal?: AbortSignal,
+    ): Promise<ToolCallEventResult> => {
       // Short-circuit: known safe commands don't need LLM classification
       if (isSafeCommand(command)) {
         return { block: false };
       }
 
-      const classificationResult = createDeferred<ToolCallEventResult>();
-
       let session: AgentSession | undefined;
+      const classificationResult = createDeferred<ToolCallEventResult>();
+      const abortClassification = () => {
+        classificationResult.reject(new Error("Classification cancelled"));
+      };
+
+      signal?.addEventListener("abort", abortClassification, { once: true });
       try {
         session = await createSession(classificationResult);
         await session.prompt(
@@ -243,6 +262,7 @@ export const createClassifier = async (options: CreateClassifierOptions): Promis
           reason: error instanceof Error ? error.message : String(error),
         };
       } finally {
+        signal?.removeEventListener("abort", abortClassification);
         session?.dispose();
       }
     },

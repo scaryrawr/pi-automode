@@ -68,10 +68,13 @@ export default async function (pi: ExtensionAPI) {
         lastUserEntry?.type === "message" && lastUserEntry.message.role === "user"
           ? userPrompt(lastUserEntry.message.content)
           : undefined;
-      return (await getClassifier(ctx)).classify({
-        prompt,
-        command: event.input.command,
-      });
+      return (await getClassifier(ctx)).classify(
+        {
+          command: event.input.command,
+          prompt,
+        },
+        ctx.signal,
+      );
     } catch (error) {
       return {
         block: true,
