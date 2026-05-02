@@ -21,8 +21,7 @@ export const classifyResultSchema = Type.Object(
     classification: Type.Enum(["safe", "ask", "dangerous"]),
     reason: Type.Optional(
       Type.String({
-        description:
-          "The reason the command requires user ask or is marked dangerous and should be blocked",
+        description: "A brief reason the command cannot be considered safe to autoapprove",
       }),
     ),
   },
@@ -166,29 +165,28 @@ export const createClassifier = async (options: CreateClassifierOptions): Promis
             });
 
             try {
-              const classificationReason =
-                typeof params.reason === "string" ? params.reason : undefined;
-
               switch (params.classification) {
                 case "safe":
                   classificationResult.resolve({ block: false });
-                  break;
+                  return {
+                    content: [],
+                    details: {
+                      classification: params.classification,
+                    },
+                  };
                 default:
                   classificationResult.resolve({
                     block: true,
-                    reason:
-                      classificationReason ??
-                      `Classifier marked command as ${params.classification}`,
+                    reason: params.reason ?? "Classified unsafe to autoapprove by classifier",
                   });
+                  return {
+                    content: [],
+                    details: {
+                      classification: params.classification,
+                      reason: params.reason,
+                    },
+                  };
               }
-
-              return {
-                content: [],
-                details: {
-                  classification: params.classification,
-                  reason: classificationReason,
-                },
-              };
             } finally {
               signal?.removeEventListener("abort", abortClassification);
             }
