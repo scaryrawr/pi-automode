@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import { getAgentDir, SettingsManager } from "@mariozechner/pi-coding-agent";
 import { z } from "zod";
@@ -10,6 +10,7 @@ const CONFIG_FILE_NAME = "automode.json";
 
 const automodeConfigSchema = z.looseObject({
   classifierModel: modelIdentifierSchema.optional(),
+  enabled: z.boolean().optional(),
 });
 
 type AutomodeConfig = z.infer<typeof automodeConfigSchema>;
@@ -40,39 +41,76 @@ const readConfig = (): AutomodeConfig | undefined => {
 };
 
 /**
- * Loads the classifier model identifier from the automode configuration.
- * @returns The configured classifier model identifier, or undefined if not set.
+ * Manages the automode configuration file.
  */
-export const getClassifierModelIdentifier = (): ModelIdentifier | undefined => {
-  let model = readConfig()?.classifierModel;
-  if (model) {
-    return model;
+export class AutomodeConfigManager {
+  private config: AutomodeConfig;
+
+  constructor() {
+    this.config = readConfig() ?? {};
   }
 
-  const settingsManager = SettingsManager.create(process.cwd());
-  const id = settingsManager.getDefaultModel();
-  const provider = settingsManager.getDefaultProvider();
-  if (id && provider) {
-    return { id, provider };
+  /**
+   * Gets whether automode is enabled.
+   * @returns True when automode is enabled, otherwise false.
+   */
+  get enabled(): boolean {
+    return this.config.enabled ?? true;
   }
 
-  return undefined;
-};
+  /**
+   * Updates the automode enabled flag and persists it.
+   * @param enabled - Whether automode should be enabled.
+   */
+  set enabled(enabled: boolean) {
+    this.config = {
+      ...this.config,
+      enabled,
+    };
 
-/**
- * Persists the classifier model identifier to the automode configuration file.
- * Creates the config directory if it doesn't exist.
- * @param modelIdentifier - The model identifier to persist (provider and id).
- * @returns An array of errors encountered during persistence, empty on success.
- */
-export const persistClassifierModelIdentifier = (modelIdentifier: ModelIdentifier) => {
-  const configPath = getConfigPath();
-  const config = readConfig() ?? {};
+    this.writeConfig();
+  }
 
-  const nextConfig: AutomodeConfig = {
-    ...config,
-    classifierModel: { ...modelIdentifier },
-  };
+  /**
+   * Loads the classifier model identifier from the automode configuration.
+   * Falls back to the default model configured in pi settings.
+   * @returns The configured classifier model identifier, or undefined if not set.
+   */
+  get modelIdentifier(): ModelIdentifier | undefined {
+    const model = this.config.classifierModel;
+    if (model) {
+      return model;
+    }
 
-  writeFileSync(configPath, JSON.stringify(nextConfig, null, 2), "utf-8");
-};
+    const settingsManager = SettingsManager.create(process.cwd());
+    const id = settingsManager.getDefaultModel();
+    const provider = settingsManager.getDefaultProvider();
+    if (id && provider) {
+      return { id, provider };
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Persists the classifier model identifier to the automode configuration file.
+   * @param modelIdentifier - The model identifier to persist (provider and id).
+   */
+  set modelIdentifier(modelIdentifier: ModelIdentifier | undefined) {
+    this.config = {
+      ...this.config,
+      classifierModel: modelIdentifier ? { ...modelIdentifier } : undefined,
+    };
+
+    this.writeConfig();
+  }
+
+  /**
+   * Writes the current automode config to disk.
+   */
+  private writeConfig(): void {
+    const configPath = getConfigPath();
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, JSON.stringify(this.config, null, 2), "utf-8");
+  }
+}

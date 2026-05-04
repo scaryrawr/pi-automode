@@ -5,11 +5,9 @@ import {
   type ToolCallEventResult,
   isToolCallEventType,
 } from "@mariozechner/pi-coding-agent";
+import type { AutocompleteItem } from "@mariozechner/pi-tui";
 
-import {
-  getClassifierModelIdentifier,
-  persistClassifierModelIdentifier,
-} from "./automode/config.js";
+import { AutomodeConfigManager } from "./automode/config.js";
 import { createClassifier } from "./classifier/classifier.js";
 import { ModelSelectorComponent } from "./ui/model-selector.js";
 
@@ -32,7 +30,8 @@ const userPrompt = (content: UserMessage["content"]): string => {
 };
 
 export default async function (pi: ExtensionAPI) {
-  let activeAutoModel = getClassifierModelIdentifier();
+  const automodeConfig = new AutomodeConfigManager();
+  let activeAutoModel = automodeConfig.modelIdentifier;
 
   /**
    * Creates a classifier instance for the current model.
@@ -61,6 +60,10 @@ export default async function (pi: ExtensionAPI) {
     }
 
     try {
+      if (!automodeConfig.enabled) {
+        return { block: false };
+      }
+
       const lastUserEntry = ctx.sessionManager
         .getBranch()
         .findLast((entry) => entry.type === "message" && entry.message.role === "user");
@@ -81,6 +84,56 @@ export default async function (pi: ExtensionAPI) {
         reason: error instanceof Error ? error.message : String(error),
       };
     }
+  });
+
+  pi.registerCommand("auto", {
+    description: "Control if auto mode is [on|off]",
+    getArgumentCompletions: (prefix) => {
+      const options: AutocompleteItem[] = [
+        {
+          value: "on",
+          label: "on",
+          description: "Enable auto mode for bash evaluation",
+        },
+        {
+          value: "off",
+          label: "off",
+          description: "Disable auto mode for bash evaluation",
+        },
+        {
+          value: "show",
+          label: "show",
+          description: "Show current auto mode status and model",
+        },
+      ];
+
+      return options.filter((option) => option.value.startsWith(prefix));
+    },
+    handler: async (args, ctx) => {
+      const arg = args.trim().toLowerCase();
+      switch (arg) {
+        case "on":
+          automodeConfig.enabled = true;
+          ctx.ui.notify("Auto mode enabled", "info");
+          break;
+        case "off":
+          automodeConfig.enabled = false;
+          ctx.ui.notify("Auto mode disabled", "info");
+          break;
+        case "show": {
+          const status = automodeConfig.enabled ? "enabled" : "disabled";
+          const model = activeAutoModel
+            ? `${activeAutoModel.id} [${activeAutoModel.provider}]`
+            : "no model configured";
+          ctx.ui.notify(`Auto mode is ${status}; model: ${model}`, "info");
+          break;
+        }
+        default:
+          automodeConfig.enabled = true;
+          ctx.ui.notify("Auto mode enabled", "info");
+          break;
+      }
+    },
   });
 
   pi.registerCommand("automodel", {
@@ -131,7 +184,7 @@ export default async function (pi: ExtensionAPI) {
           id: selected.id,
         };
 
-        persistClassifierModelIdentifier(activeAutoModel);
+        automodeConfig.modelIdentifier = activeAutoModel;
 
         ctx.ui.notify(
           `Auto mode classifier model set to ${selected.id} [${selected.provider}]`,
