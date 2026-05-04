@@ -7,7 +7,7 @@ This repo implements the **automode extension** for the pi coding agent — an A
 **Extension structure:**
 
 - `extensions/automode.ts` — Extension entry point. Registers the `automodel` command and subscribes to `tool_call` events, delegating bash commands to the classifier.
-- `extensions/automode/config.ts` — Reads/writes `automode.json` from the agent's config directory. Uses Zod for schema validation.
+- `extensions/automode/config.ts` — Reads/writes `automode.json` from the agent's config directory. Uses TypeBox for schema validation.
 - `extensions/automode/types.ts` — Shared type: `ModelIdentifier = { provider: string, id: string }`.
 - `extensions/classifier/classifier.ts` — Core classifier: spins up an in-memory agent session with a custom `classify_shell_command` tool. The model classifies commands as `safe`, `ask`, or `dangerous` and resolves a deferred `ToolCallEventResult`.
 - `extensions/classifier/classifier.test.ts` — Integration tests against a real model (lmstudio).
@@ -25,12 +25,16 @@ This repo implements the **automode extension** for the pi coding agent — an A
 - **Naming**: Functions use `camelCase`. Type exports use PascalCase. JSDoc `@param`/`@returns`/`@throws` for public APIs.
 - **Error handling**: Always wrap in try/catch; return typed error arrays (`{ scope, error }`) rather than throwing from config helpers.
 - **Imports**: Use explicit `.js` extensions for relative imports (TS/Nodenext convention).
-- **Zod**: Use `.looseObject()` for config schemas to tolerate extra keys.
+- **TypeBox**: Use `Type.Object()` for config schemas; validate with `Compile` from `typebox/compile`.
 
 ## Build & Test
 
 ```bash
 npm run build    # tsgo -p ./tsconfig.json
+npm run fmt      # oxfmt
+npm run fmt:check # oxfmt --check
+npm run lint     # oxlint -c .oxlintrc.json --tsconfig ./tsconfig.json ./extensions/*.ts ./extensions/**/*.ts
+npm run lint:fix # oxlint -c .oxlintrc.json --fix --tsconfig ./tsconfig.json ./extensions/*.ts ./extensions/**/*.ts
 npm test         # vitest
 ```
 
