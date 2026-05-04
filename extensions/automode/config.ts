@@ -1,19 +1,26 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { Type, type Static } from "@mariozechner/pi-ai";
 import { getAgentDir, SettingsManager } from "@mariozechner/pi-coding-agent";
-import { z } from "zod";
-
-import { type ModelIdentifier, modelIdentifierSchema } from "./types.js";
+import { Compile } from "typebox/compile";
 
 const CONFIG_FILE_NAME = "automode.json";
 
-const automodeConfigSchema = z.looseObject({
-  classifierModel: modelIdentifierSchema.optional(),
-  enabled: z.boolean().optional(),
+const automodeConfigSchema = Type.Object({
+  classifierModel: Type.Optional(
+    Type.Object({
+      id: Type.String(),
+      provider: Type.String(),
+    }),
+  ),
+  enabled: Type.Optional(Type.Boolean()),
 });
 
-type AutomodeConfig = z.infer<typeof automodeConfigSchema>;
+const AutomodeConfigSchema = Compile(automodeConfigSchema);
+
+type AutomodeConfig = Static<typeof automodeConfigSchema>;
+export type ModelIdentifier = Required<AutomodeConfig>["classifierModel"];
 
 /**
  * Gets the full path to the automode configuration file.
@@ -33,8 +40,7 @@ const readConfig = (): AutomodeConfig | undefined => {
   }
 
   try {
-    const result = automodeConfigSchema.safeParse(JSON.parse(readFileSync(configPath, "utf-8")));
-    return result.success ? result.data : undefined;
+    return AutomodeConfigSchema.Parse(JSON.parse(readFileSync(configPath, "utf-8")));
   } catch {
     return undefined;
   }
@@ -96,10 +102,10 @@ export class AutomodeConfigManager {
    * Persists the classifier model identifier to the automode configuration file.
    * @param modelIdentifier - The model identifier to persist (provider and id).
    */
-  set modelIdentifier(modelIdentifier: ModelIdentifier | undefined) {
+  set modelIdentifier(modelIdentifier: ModelIdentifier) {
     this.config = {
       ...this.config,
-      classifierModel: modelIdentifier ? { ...modelIdentifier } : undefined,
+      classifierModel: modelIdentifier,
     };
 
     this.writeConfig();
