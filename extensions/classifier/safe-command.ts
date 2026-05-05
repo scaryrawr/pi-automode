@@ -1,156 +1,384 @@
-// stolen from https://github.com/badlogic/pi-mono/blob/156a9052bc08a5ed08b7f2b82a27796253c4760d/packages/coding-agent/examples/extensions/plan-mode/utils.ts
 /**
- * Pure utility function to determine if a shell command is safe to run
- * without LLM classification.
+ * Pure utility functions to determine if a shell command has an obvious
+ * classification without LLM classification.
  *
- * Commands must match at least one safe pattern AND no destructive patterns.
- * This is a conservative list — read-only commands and benign git operations.
+ * Commands must parse cleanly and every command node must be known-safe before
+ * a command is auto-approved. Known-dangerous command nodes can be blocked
+ * without asking the LLM.
  */
 
-// Commands that are clearly safe — read-only, listing, or benign operations
-const SAFE_PATTERNS: RegExp[] = [
-  // Read-only file reading
-  /^\s*cat\b/,
-  /^\s*head\b/,
-  /^\s*tail\b/,
-  /^\s*less\b/,
-  /^\s*more\b/,
-  /^\s*bat\b/,
-  /^\s*file\b/,
-  /^\s*stat\b/,
-  /^\s*wc\b/,
-  /^\s*sort\b/,
-  /^\s*uniq\b/,
-  /^\s*diff\b/,
-  /^\s*du\b/,
-  /^\s*df\b/,
-  /^\s*tree\b/,
-  /^\s*which\b/,
-  /^\s*whereis\b/,
-  /^\s*type\b/,
-  /^\s*env\b/,
-  /^\s*printenv\b/,
-  /^\s*uname\b/,
-  /^\s*whoami\b/,
-  /^\s*id\b/,
-  /^\s*date\b/,
-  /^\s*cal\b/,
-  /^\s*uptime\b/,
-  /^\s*ps\b/,
-  /^\s*top\b/,
-  /^\s*htop\b/,
-  /^\s*free\b/,
+import { createRequire } from "node:module";
+import path from "node:path";
 
-  // Search and list
-  /^\s*ls\b/,
-  /^\s*pwd\b/,
-  /^\s*echo\b/,
-  /^\s*printf\b/,
-  /^\s*grep\b/,
-  /^\s*find\b/,
-  /^\s*rg\b/,
-  /^\s*fd\b/,
-  /^\s*jq\b/,
-  /^\s*sed\s+-n\b/,
-  /^\s*awk\b/,
-  /^\s*eza\b/,
+import { Language, Parser, type Node } from "web-tree-sitter";
 
-  // Git read-only operations
-  /^\s*git\s+(status|log|diff|show|branch|remote|config\s+--get|ls-files|ls-tree|tag\s+-l|fetch|describe|for-each-ref|rev-list|peek)\b/i,
-  /^\s*git\s+ls-\w+/i,
+export type KnownCommandClassification = "safe" | "dangerous" | "unknown";
 
-  // Package manager listing (read-only)
-  /^\s*npm\s+(list|ls|view|info|search|outdated|audit|show)\b/i,
-  /^\s*yarn\s+(list|info|why|audit|show)\b/i,
-  /^\s*pip\s+(list|show|freeze|inspect)\b/i,
+const require = createRequire(import.meta.url);
 
-  // Version checks
-  /^\s*node\s+--version/i,
-  /^\s*python\s+--version/i,
-  /^\s*npm\s+--version/i,
-  /^\s*git\s+--version/i,
-];
+let parserPromise: Promise<Parser> | undefined;
 
-// Commands that are clearly dangerous — destructive, privileged, or risky
-const DESTRUCTIVE_PATTERNS: RegExp[] = [
-  // File deletion/modification
-  /\brm\b/i,
-  /\brmdir\b/i,
-  /\bshred\b/i,
-  /\bdd\b/i,
-  /\btruncate\b/i,
+const SAFE_COMMANDS = new Set([
+  "awk",
+  "bat",
+  "cal",
+  "cat",
+  "date",
+  "df",
+  "diff",
+  "du",
+  "echo",
+  "eza",
+  "fd",
+  "file",
+  "free",
+  "grep",
+  "head",
+  "htop",
+  "id",
+  "jq",
+  "less",
+  "ls",
+  "more",
+  "printenv",
+  "printf",
+  "ps",
+  "pwd",
+  "rg",
+  "sort",
+  "stat",
+  "tail",
+  "top",
+  "tree",
+  "type",
+  "uname",
+  "uniq",
+  "uptime",
+  "wc",
+  "whereis",
+  "which",
+  "whoami",
+]);
 
-  // File move/copy/creation (outside of safe git context)
-  /\bmv\b/i,
-  /\bcp\b/i,
-  /\bmkdir\b/i,
-  /\btouch\b/i,
-  /\bchmod\b/i,
-  /\bchown\b/i,
-  /\bchgrp\b/i,
-  /\bln\b/i,
-  /\btee\b/i,
+const DANGEROUS_COMMANDS = new Set([
+  ".",
+  "dd",
+  "doas",
+  "eval",
+  "kill",
+  "killall",
+  "pkill",
+  "reboot",
+  "rm",
+  "rmdir",
+  "shred",
+  "shutdown",
+  "source",
+  "su",
+  "sudo",
+  "truncate",
+]);
 
-  // Redirection (can overwrite files)
-  /(^|[^<])>(?!>)/,
-  /\b>\s*\/etc\//i,
-  /\b>\s*\/root\//i,
-  /\b>>\s*\/etc\//i,
+const INTERACTIVE_EDITORS = new Set([
+  "code",
+  "emacs",
+  "nano",
+  "neovim",
+  "nvim",
+  "subl",
+  "vi",
+  "vim",
+]);
 
-  // Package installation/removal
-  /\bnpm\s+(install|uninstall|update|ci|link|publish|exec|run)\b/i,
-  /\byarn\s+(add|remove|install|publish|run|exec)\b/i,
-  /\bpnpm\s+(add|remove|install|publish|exec|run)\b/i,
-  /\bpip\s+(install|uninstall|upgrade|compile)\b/i,
-  /\bapt(-get)?\s+(install|remove|purge|update|upgrade|dist-upgrade)\b/i,
-  /\bbrew\s+(install|uninstall|upgrade|update|cleanup|pin|unpin)\b/i,
+const GIT_SAFE_SUBCOMMANDS = new Set([
+  "branch",
+  "describe",
+  "diff",
+  "fetch",
+  "for-each-ref",
+  "log",
+  "ls-files",
+  "ls-tree",
+  "peek",
+  "rev-list",
+  "show",
+  "status",
+]);
 
-  // Git destructive operations
-  /\bgit\s+(reset|rebase|filter-branch|reflog\s+delete)\b/i,
-  /\bgit\s+push\s+(--force|--force-with-lease)\b/i,
-  /\bgit\s+push\s+--delete\b/i,
-  /\bgit\s+push\s+--force-with-lease\b/i,
-  /\bgit\s+clean\s+-fd\b/i,
-  /\bgit\s+clean\s+-fdx\b/i,
-  /\bgit\s+branch\s+-D\b/i,
-  /\bgit\s+branch\s+-d\s+.*\s+-D\b/i,
-  /\bgit\s+checkout\s+-b\b/i,
-  /\bgit\s+switch\s+-c\b/i,
+const PACKAGE_SAFE_SUBCOMMANDS = new Map([
+  ["npm", new Set(["audit", "info", "list", "ls", "outdated", "search", "show", "view"])],
+  ["pip", new Set(["freeze", "inspect", "list", "show"])],
+  ["yarn", new Set(["audit", "info", "list", "show", "why"])],
+]);
 
-  // Privilege escalation
-  /\bsudo\b/i,
-  /\bsu\b/i,
-  /\bdoas\b/i,
+const SHELL_COMMANDS = new Set(["bash", "sh", "zsh"]);
+const VERSION_COMMANDS = new Set(["git", "node", "npm", "python"]);
+const GIT_OPTIONS_WITH_VALUES = new Set([
+  "--exec-path",
+  "--git-dir",
+  "--namespace",
+  "--super-prefix",
+  "--work-tree",
+  "-C",
+  "-c",
+]);
 
-  // Process killing / system control
-  /\bkill\b/i,
-  /\bpkill\b/i,
-  /\bkillall\b/i,
-  /\breboot\b/i,
-  /\bshutdown\b/i,
-  /\bsystemctl\s+(start|stop|restart|enable|disable|mask|unmask)\b/i,
-  /\bservice\s+\S+\s+(start|stop|restart|reload)\b/i,
+const createParser = async (): Promise<Parser> => {
+  await Parser.init({
+    locateFile: () => require.resolve("web-tree-sitter/tree-sitter.wasm"),
+  });
 
-  // Interactive editors / code
-  /\b(vim?|nano|emacs|code|subl|neovim|nvim)\b/i,
+  const bashWasmPath = path.join(
+    path.dirname(require.resolve("tree-sitter-bash/package.json")),
+    "tree-sitter-bash.wasm",
+  );
+  const bash = await Language.load(bashWasmPath);
+  const parser = new Parser();
+  parser.setLanguage(bash);
+  return parser;
+};
 
-  // Shell execution / eval
-  /\beval\b/i,
-  /\bsource\s+/i,
-  /\b\.s?\s+/i,
-  /\bsh\s+-c\b/i,
-  /\bbash\s+-c\b/i,
-  /\bzsh\s+-c\b/i,
-  /\bwget\s+-O\b/i,
-];
+const getParser = (): Promise<Parser> => {
+  parserPromise ??= createParser().catch((error: unknown) => {
+    parserPromise = undefined;
+    throw error;
+  });
+
+  return parserPromise;
+};
+
+const isNode = (node: Node | null): node is Node => node !== null;
+
+const normalizeCommandName = (commandName: string): string => {
+  const trimmed = commandName.trim();
+  const basename = trimmed.includes("/") ? path.posix.basename(trimmed) : trimmed;
+  return basename.toLowerCase();
+};
+
+const getCommandParts = (commandNode: Node): { name: string; args: string[] } | undefined => {
+  const name = commandNode.childForFieldName("name");
+  if (!name) {
+    return undefined;
+  }
+
+  return {
+    name: normalizeCommandName(name.text),
+    args: commandNode
+      .childrenForFieldName("argument")
+      .filter(isNode)
+      .map((arg) => arg.text),
+  };
+};
+
+const hasOutputRedirect = (root: Node): boolean =>
+  root
+    .descendantsOfType("file_redirect")
+    .filter(isNode)
+    .some((redirect) => redirect.children.filter(isNode).some((child) => child.text.includes(">")));
+
+const getGitSubcommand = (args: string[]): string | undefined => {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (!arg) {
+      continue;
+    }
+
+    if (GIT_OPTIONS_WITH_VALUES.has(arg)) {
+      i += 1;
+      continue;
+    }
+
+    if (arg.startsWith("-")) {
+      continue;
+    }
+
+    return arg.toLowerCase();
+  }
+
+  return undefined;
+};
+
+const classifyGitCommand = (args: string[]): KnownCommandClassification => {
+  if (args.includes("--version")) {
+    return "safe";
+  }
+
+  const subcommand = getGitSubcommand(args);
+  if (!subcommand) {
+    return "unknown";
+  }
+
+  if (subcommand === "reset" && args.includes("--hard")) {
+    return "dangerous";
+  }
+
+  if (subcommand === "push") {
+    return args.some((arg) => ["--delete", "--force", "--force-with-lease"].includes(arg))
+      ? "dangerous"
+      : "unknown";
+  }
+
+  if (subcommand === "clean") {
+    return args.some((arg) => arg.includes("f")) ? "dangerous" : "unknown";
+  }
+
+  if (subcommand === "branch") {
+    return args.some((arg) => arg === "-D" || arg.includes("D")) ? "dangerous" : "safe";
+  }
+
+  if (subcommand === "rebase" || subcommand === "filter-branch") {
+    return "dangerous";
+  }
+
+  if (subcommand === "reflog" && args.includes("delete")) {
+    return "dangerous";
+  }
+
+  if (subcommand === "config") {
+    return args.includes("--get") ? "safe" : "unknown";
+  }
+
+  if (subcommand === "tag") {
+    return args.some((arg) => arg === "-l" || arg === "--list") ? "safe" : "unknown";
+  }
+
+  if (subcommand === "remote") {
+    const remoteSubcommand = args[args.indexOf(subcommand) + 1];
+    return !remoteSubcommand || ["-v", "get-url", "show"].includes(remoteSubcommand)
+      ? "safe"
+      : "unknown";
+  }
+
+  return GIT_SAFE_SUBCOMMANDS.has(subcommand) || subcommand.startsWith("ls-") ? "safe" : "unknown";
+};
+
+const classifyPackageCommand = (
+  name: string,
+  args: string[],
+): KnownCommandClassification | undefined => {
+  const subcommand = args.find((arg) => !arg.startsWith("-"))?.toLowerCase();
+  if (!subcommand) {
+    return undefined;
+  }
+
+  if (PACKAGE_SAFE_SUBCOMMANDS.get(name)?.has(subcommand)) {
+    return "safe";
+  }
+
+  return undefined;
+};
+
+const classifyCommandNode = (commandNode: Node): KnownCommandClassification => {
+  const parts = getCommandParts(commandNode);
+  if (!parts) {
+    return "unknown";
+  }
+
+  const { name, args } = parts;
+  if (DANGEROUS_COMMANDS.has(name) || INTERACTIVE_EDITORS.has(name)) {
+    return "dangerous";
+  }
+
+  if (SHELL_COMMANDS.has(name)) {
+    return args.includes("-c") ? "dangerous" : "unknown";
+  }
+
+  if (name === "systemctl") {
+    return args.some((arg) =>
+      ["disable", "enable", "mask", "restart", "start", "stop", "unmask"].includes(arg),
+    )
+      ? "dangerous"
+      : "unknown";
+  }
+
+  if (name === "service") {
+    return args.some((arg) => ["reload", "restart", "start", "stop"].includes(arg))
+      ? "dangerous"
+      : "unknown";
+  }
+
+  if (name === "git") {
+    return classifyGitCommand(args);
+  }
+
+  const packageClassification = classifyPackageCommand(name, args);
+  if (packageClassification) {
+    return packageClassification;
+  }
+
+  if (VERSION_COMMANDS.has(name) && args.some((arg) => arg === "--version" || arg === "-v")) {
+    return "safe";
+  }
+
+  if (name === "sed") {
+    return args[0]?.startsWith("-n") === true && !args.some((arg) => arg.includes("i"))
+      ? "safe"
+      : "unknown";
+  }
+
+  if (name === "find") {
+    if (args.includes("-delete")) {
+      return "dangerous";
+    }
+
+    return args.some((arg) => ["-exec", "-execdir", "-ok", "-okdir"].includes(arg))
+      ? "unknown"
+      : "safe";
+  }
+
+  if (name === "awk") {
+    return args.some((arg) => arg.includes("system(")) ? "unknown" : "safe";
+  }
+
+  return SAFE_COMMANDS.has(name) ? "safe" : "unknown";
+};
+
+/**
+ * Classifies a shell command when its AST is clearly known-safe or known-dangerous.
+ * @param command - The shell command to evaluate.
+ * @returns The known classification, or `"unknown"` if the command should be sent to the LLM.
+ */
+export async function classifyKnownCommand(command: string): Promise<KnownCommandClassification> {
+  const parser = await getParser();
+  const tree = parser.parse(command);
+  if (!tree) {
+    return "unknown";
+  }
+
+  try {
+    const root = tree.rootNode;
+    if (root.hasError || hasOutputRedirect(root)) {
+      return "unknown";
+    }
+
+    const commandNodes = root.descendantsOfType("command").filter(isNode);
+    if (commandNodes.length === 0) {
+      return "unknown";
+    }
+
+    let sawUnknown = false;
+    for (const commandNode of commandNodes) {
+      const classification = classifyCommandNode(commandNode);
+      if (classification === "dangerous") {
+        return "dangerous";
+      }
+
+      if (classification === "unknown") {
+        sawUnknown = true;
+      }
+    }
+
+    return sawUnknown ? "unknown" : "safe";
+  } finally {
+    tree.delete();
+  }
+}
 
 /**
  * Determines if a shell command is safe to run without LLM classification.
  * @param command - The shell command to evaluate.
  * @returns `true` if the command is clearly safe (read-only, benign); `false` otherwise.
  */
-export function isSafeCommand(command: string): boolean {
-  const matchesSafe = SAFE_PATTERNS.some((p) => p.test(command));
-  const matchesDestructive = DESTRUCTIVE_PATTERNS.some((p) => p.test(command));
-  return matchesSafe && !matchesDestructive;
+export async function isSafeCommand(command: string): Promise<boolean> {
+  return (await classifyKnownCommand(command)) === "safe";
 }
