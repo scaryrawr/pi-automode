@@ -13,7 +13,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 
-import { isSafeCommand } from "./safe-command.js";
+import { classifyKnownCommand } from "./safe-command.js";
 
 /** Result schema for the classify_shell_command tool, indicating if the command is safe to run and the reason if not. */
 export const classifyResultSchema = Type.Object(
@@ -216,9 +216,13 @@ export const createClassifier = async (options: CreateClassifierOptions): Promis
       { command, prompt }: ClassifyOptions,
       signal?: AbortSignal,
     ): Promise<ToolCallEventResult> => {
-      // Short-circuit: known safe commands don't need LLM classification
-      if (isSafeCommand(command)) {
+      // Short-circuit: known commands don't need LLM classification.
+      const knownClassification = await classifyKnownCommand(command);
+      if (knownClassification === "safe") {
         return { block: false };
+      }
+      if (knownClassification === "dangerous") {
+        return { block: true, reason: "Command contains a known-dangerous shell operation." };
       }
 
       let session: AgentSession | undefined;
