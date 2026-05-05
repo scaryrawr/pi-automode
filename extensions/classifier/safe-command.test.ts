@@ -25,8 +25,18 @@ describe("when classifying known shell commands with tree-sitter", () => {
     await expect(classifyKnownCommand("git status && rm -rf *")).resolves.toBe("dangerous");
   });
 
-  it("should not auto-approve commands with output redirection", async () => {
+  it("should not auto-approve commands with output redirection to real files", async () => {
     await expect(classifyKnownCommand("echo hi > output.txt")).resolves.toBe("unknown");
+    await expect(classifyKnownCommand("echo hi 2>/tmp/errors.log")).resolves.toBe("unknown");
+    await expect(classifyKnownCommand("echo hi 2>&1 > output.txt")).resolves.toBe("unknown");
+  });
+
+  it("should allow output redirection that does not write real files", async () => {
+    await expect(classifyKnownCommand("echo hi 2>&1")).resolves.toBe("safe");
+    await expect(classifyKnownCommand("echo hi 2>/dev/null")).resolves.toBe("safe");
+    await expect(classifyKnownCommand("echo hi >/dev/null 2>&1")).resolves.toBe("safe");
+    await expect(classifyKnownCommand("echo hi &>/dev/null")).resolves.toBe("safe");
+    await expect(classifyKnownCommand('echo hi > "/dev/null"')).resolves.toBe("safe");
   });
 
   it("should leave package manager write commands for the model", async () => {

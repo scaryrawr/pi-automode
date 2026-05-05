@@ -170,11 +170,51 @@ const getCommandParts = (commandNode: Node): { name: string; args: string[] } | 
   };
 };
 
-const hasOutputRedirect = (root: Node): boolean =>
+const OUTPUT_REDIRECT_OPERATORS = new Set([">", ">>", ">|", ">&", ">&-", "&>", "&>>"]);
+
+const getRedirectOperator = (redirect: Node): string | undefined =>
+  redirect.children.filter(isNode).find((child) => OUTPUT_REDIRECT_OPERATORS.has(child.type))?.type;
+
+const getLiteralRedirectDestination = (destination: Node | null): string | undefined => {
+  if (!destination) {
+    return undefined;
+  }
+
+  if (destination.type === "word") {
+    return destination.text;
+  }
+
+  if (destination.type === "raw_string" || destination.type === "string") {
+    const quote = destination.text[0];
+    return (quote === "'" || quote === '"') && destination.text.endsWith(quote)
+      ? destination.text.slice(1, -1)
+      : undefined;
+  }
+
+  return undefined;
+};
+
+const isSafeOutputRedirect = (redirect: Node): boolean => {
+  const operator = getRedirectOperator(redirect);
+  if (!operator) {
+    return true;
+  }
+
+  if (operator === ">&-" || operator === ">&") {
+    const destination = redirect.childForFieldName("destination");
+    if (operator === ">&-" || destination?.type === "number") {
+      return true;
+    }
+  }
+
+  return getLiteralRedirectDestination(redirect.childForFieldName("destination")) === "/dev/null";
+};
+
+const hasUnsafeOutputRedirect = (root: Node): boolean =>
   root
     .descendantsOfType("file_redirect")
     .filter(isNode)
-    .some((redirect) => redirect.children.filter(isNode).some((child) => child.text.includes(">")));
+    .some((redirect) => !isSafeOutputRedirect(redirect));
 
 const getGitSubcommand = (args: string[]): string | undefined => {
   for (let i = 0; i < args.length; i += 1) {
@@ -347,7 +387,7 @@ export async function classifyKnownCommand(command: string): Promise<KnownComman
 
   try {
     const root = tree.rootNode;
-    if (root.hasError || hasOutputRedirect(root)) {
+    if (root.hasError || hasUnsafeOutputRedirect(root)) {
       return "unknown";
     }
 
