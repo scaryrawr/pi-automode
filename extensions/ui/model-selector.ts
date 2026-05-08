@@ -1,7 +1,7 @@
 // stolen from https://github.com/badlogic/pi-mono/blob/156a9052bc08a5ed08b7f2b82a27796253c4760d/packages/coding-agent/src/modes/interactive/components/model-selector.ts
-import { type Api, type Model, modelsAreEqual } from "@mariozechner/pi-ai";
-import type { ModelRegistry, Theme } from "@mariozechner/pi-coding-agent";
-import { DynamicBorder } from "@mariozechner/pi-coding-agent";
+import { type Api, type Model, modelsAreEqual } from "@earendil-works/pi-ai";
+import type { ModelRegistry, Theme } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import {
   Container,
   type Focusable,
@@ -14,7 +14,7 @@ import {
   Text,
   type TUI,
   truncateToWidth,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 
 interface ModelItem {
   provider: string;

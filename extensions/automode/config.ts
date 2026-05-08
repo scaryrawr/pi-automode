@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { Type, type Static } from "@mariozechner/pi-ai";
-import { getAgentDir, SettingsManager } from "@mariozechner/pi-coding-agent";
+import { Type, type Static } from "@earendil-works/pi-ai";
+import { getAgentDir, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { Compile } from "typebox/compile";
 
 const CONFIG_FILE_NAME = "automode.json";

@@ -19,7 +19,7 @@
     "web-tree-sitter": "^0.25.10"
   },
   "devDependencies": {
-    "@mariozechner/pi-coding-agent": "^0.70.6",
+    "@earendil-works/pi-coding-agent": "^0.74.0",
     "@typescript/native-preview": "^7.0.0-dev.20260428.1",
     "oxfmt": "^0.47.0",
     "oxlint": "^1.62.0",

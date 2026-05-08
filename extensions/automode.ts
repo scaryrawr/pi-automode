@@ -1,11 +1,11 @@
-import type { Api, Model, UserMessage } from "@mariozechner/pi-ai";
+import type { Api, Model, UserMessage } from "@earendil-works/pi-ai";
 import {
   type ExtensionAPI,
   type ExtensionContext,
   type ToolCallEventResult,
   isToolCallEventType,
-} from "@mariozechner/pi-coding-agent";
-import type { AutocompleteItem } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import type { AutocompleteItem } from "@earendil-works/pi-tui";
 
 import { AutomodeConfigManager } from "./automode/config.js";
 import { createClassifier } from "./classifier/classifier.js";
