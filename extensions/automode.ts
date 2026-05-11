@@ -1,7 +1,9 @@
-import type { Api, Model, UserMessage } from "@earendil-works/pi-ai";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { Api, ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
 import {
   type ExtensionAPI,
   type ExtensionContext,
+  type SessionEntry,
   type ToolCallEventResult,
   isToolCallEventType,
 } from "@earendil-works/pi-coding-agent";
@@ -14,19 +16,55 @@ import { ModelSelectorComponent } from "./ui/model-selector.js";
 type ClassifierContext = Pick<ExtensionContext, "modelRegistry">;
 
 /**
- * Convert user message content to plain text for classifier input.
- * @param content - The content of a user message, which can be a string or an array of text/image blocks.
- * @returns The extracted plain text from the user message content, concatenating text blocks if necessary.
+ * Extract plain text from message content (string or array of text/image blocks).
+ * @param content - The content of a message, which can be a string or an array of text/image blocks.
+ * @returns The extracted plain text, concatenating text blocks if necessary.
  */
-const userPrompt = (content: UserMessage["content"]): string => {
+const extractText = (content: string | (TextContent | ImageContent)[]): string => {
   if (typeof content === "string") {
     return content;
   }
 
   return content
-    .filter((b) => b.type === "text")
-    .map((b) => b.text)
+    .filter(
+      (b): b is TextContent =>
+        typeof b === "object" && b !== null && "type" in b && b.type === "text",
+    )
+    .map((b) => (b as TextContent).text)
     .join("\n");
+};
+
+/**
+ * Check if a message is a user message (role === "user").
+ * @param msg - The agent message to check.
+ * @returns True if the message is a user message.
+ */
+const isUserMessage = (msg: AgentMessage): boolean => {
+  return "role" in msg && msg.role === "user";
+};
+
+/**
+ * Find the latest user-submitted prompt for the classifier.
+ * Full session histories are too heavy; the classifier only needs the latest user intent to evaluate
+ * whether the current bash command aligns with what the user asked for.
+ *
+ * @param entries - Session entries from getBranch()
+ * @returns The latest user message text, or an empty string if none is present.
+ */
+const getLastUserPrompt = (entries: SessionEntry[]): string => {
+  // Iterate in reverse to find the last user message
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i];
+    if (entry?.type === "message") {
+      const msg = entry.message;
+      if (isUserMessage(msg)) {
+        const content = msg as AgentMessage & { content: string | (TextContent | ImageContent)[] };
+        const text = extractText(content.content);
+        return text;
+      }
+    }
+  }
+  return "";
 };
 
 export default async function (pi: ExtensionAPI) {
@@ -64,17 +102,11 @@ export default async function (pi: ExtensionAPI) {
         return { block: false };
       }
 
-      const lastUserEntry = ctx.sessionManager
-        .getBranch()
-        .findLast((entry) => entry.type === "message" && entry.message.role === "user");
-      const prompt =
-        lastUserEntry?.type === "message" && lastUserEntry.message.role === "user"
-          ? userPrompt(lastUserEntry.message.content)
-          : undefined;
+      const lastUserPrompt = getLastUserPrompt(ctx.sessionManager.getBranch());
       return (await getClassifier(ctx)).classify(
         {
           command: event.input.command,
-          prompt,
+          lastUserPrompt,
         },
         ctx.signal,
       );
