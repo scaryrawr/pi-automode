@@ -2,8 +2,8 @@
  * Pure utility functions to determine if a shell command has an obvious
  * classification without LLM classification.
  *
- * Commands must parse cleanly and every command node must be known-safe before
- * a command is auto-approved. Known-dangerous command nodes can be blocked
+ * Commands must parse cleanly and every command node must be known-allowed before
+ * a command is auto-approved. Known-block command nodes can be blocked
  * without asking the LLM.
  */
 
@@ -12,7 +12,7 @@ import path from "node:path";
 
 import { Language, Parser, type Node } from "web-tree-sitter";
 
-export type KnownCommandClassification = "safe" | "dangerous" | "unknown";
+export type KnownCommandClassification = "allow" | "block" | "unknown";
 
 const require = createRequire(import.meta.url);
 
@@ -240,7 +240,7 @@ const getGitSubcommand = (args: string[]): string | undefined => {
 
 const classifyGitCommand = (args: string[]): KnownCommandClassification => {
   if (args.includes("--version")) {
-    return "safe";
+    return "allow";
   }
 
   const subcommand = getGitSubcommand(args);
@@ -249,47 +249,47 @@ const classifyGitCommand = (args: string[]): KnownCommandClassification => {
   }
 
   if (subcommand === "reset" && args.includes("--hard")) {
-    return "dangerous";
+    return "block";
   }
 
   if (subcommand === "push") {
     return args.some((arg) => ["--delete", "--force", "--force-with-lease"].includes(arg))
-      ? "dangerous"
+      ? "block"
       : "unknown";
   }
 
   if (subcommand === "clean") {
-    return args.some((arg) => arg.includes("f")) ? "dangerous" : "unknown";
+    return args.some((arg) => arg.includes("f")) ? "block" : "unknown";
   }
 
   if (subcommand === "branch") {
-    return args.some((arg) => arg === "-D" || arg.includes("D")) ? "dangerous" : "safe";
+    return args.some((arg) => arg === "-D" || arg.includes("D")) ? "block" : "allow";
   }
 
   if (subcommand === "rebase" || subcommand === "filter-branch") {
-    return "dangerous";
+    return "block";
   }
 
   if (subcommand === "reflog" && args.includes("delete")) {
-    return "dangerous";
+    return "block";
   }
 
   if (subcommand === "config") {
-    return args.includes("--get") ? "safe" : "unknown";
+    return args.includes("--get") ? "allow" : "unknown";
   }
 
   if (subcommand === "tag") {
-    return args.some((arg) => arg === "-l" || arg === "--list") ? "safe" : "unknown";
+    return args.some((arg) => arg === "-l" || arg === "--list") ? "allow" : "unknown";
   }
 
   if (subcommand === "remote") {
     const remoteSubcommand = args[args.indexOf(subcommand) + 1];
     return !remoteSubcommand || ["-v", "get-url", "show"].includes(remoteSubcommand)
-      ? "safe"
+      ? "allow"
       : "unknown";
   }
 
-  return GIT_SAFE_SUBCOMMANDS.has(subcommand) || subcommand.startsWith("ls-") ? "safe" : "unknown";
+  return GIT_SAFE_SUBCOMMANDS.has(subcommand) || subcommand.startsWith("ls-") ? "allow" : "unknown";
 };
 
 const classifyPackageCommand = (
@@ -302,7 +302,7 @@ const classifyPackageCommand = (
   }
 
   if (PACKAGE_SAFE_SUBCOMMANDS.get(name)?.has(subcommand)) {
-    return "safe";
+    return "allow";
   }
 
   return undefined;
@@ -316,24 +316,24 @@ const classifyCommandNode = (commandNode: Node): KnownCommandClassification => {
 
   const { name, args } = parts;
   if (DANGEROUS_COMMANDS.has(name) || INTERACTIVE_EDITORS.has(name)) {
-    return "dangerous";
+    return "block";
   }
 
   if (SHELL_COMMANDS.has(name)) {
-    return args.includes("-c") ? "dangerous" : "unknown";
+    return args.includes("-c") ? "block" : "unknown";
   }
 
   if (name === "systemctl") {
     return args.some((arg) =>
       ["disable", "enable", "mask", "restart", "start", "stop", "unmask"].includes(arg),
     )
-      ? "dangerous"
+      ? "block"
       : "unknown";
   }
 
   if (name === "service") {
     return args.some((arg) => ["reload", "restart", "start", "stop"].includes(arg))
-      ? "dangerous"
+      ? "block"
       : "unknown";
   }
 
@@ -347,34 +347,34 @@ const classifyCommandNode = (commandNode: Node): KnownCommandClassification => {
   }
 
   if (VERSION_COMMANDS.has(name) && args.some((arg) => arg === "--version" || arg === "-v")) {
-    return "safe";
+    return "allow";
   }
 
   if (name === "sed") {
     return args[0]?.startsWith("-n") === true && !args.some((arg) => arg.includes("i"))
-      ? "safe"
+      ? "allow"
       : "unknown";
   }
 
   if (name === "find") {
     if (args.includes("-delete")) {
-      return "dangerous";
+      return "block";
     }
 
     return args.some((arg) => ["-exec", "-execdir", "-ok", "-okdir"].includes(arg))
       ? "unknown"
-      : "safe";
+      : "allow";
   }
 
   if (name === "awk") {
-    return args.some((arg) => arg.includes("system(")) ? "unknown" : "safe";
+    return args.some((arg) => arg.includes("system(")) ? "unknown" : "allow";
   }
 
-  return SAFE_COMMANDS.has(name) ? "safe" : "unknown";
+  return SAFE_COMMANDS.has(name) ? "allow" : "unknown";
 };
 
 /**
- * Classifies a shell command when its AST is clearly known-safe or known-dangerous.
+ * Classifies a shell command when its AST is clearly known-allowed or known-block.
  * @param command - The shell command to evaluate.
  * @returns The known classification, or `"unknown"` if the command should be sent to the LLM.
  */
@@ -399,8 +399,8 @@ export async function classifyKnownCommand(command: string): Promise<KnownComman
     let sawUnknown = false;
     for (const commandNode of commandNodes) {
       const classification = classifyCommandNode(commandNode);
-      if (classification === "dangerous") {
-        return "dangerous";
+      if (classification === "block") {
+        return "block";
       }
 
       if (classification === "unknown") {
@@ -408,17 +408,17 @@ export async function classifyKnownCommand(command: string): Promise<KnownComman
       }
     }
 
-    return sawUnknown ? "unknown" : "safe";
+    return sawUnknown ? "unknown" : "allow";
   } finally {
     tree.delete();
   }
 }
 
 /**
- * Determines if a shell command is safe to run without LLM classification.
+ * Determines if a shell command is allowed to run without LLM classification.
  * @param command - The shell command to evaluate.
- * @returns `true` if the command is clearly safe (read-only, benign); `false` otherwise.
+ * @returns `true` if the command is clearly allowed (read-only, benign); `false` otherwise.
  */
-export async function isSafeCommand(command: string): Promise<boolean> {
-  return (await classifyKnownCommand(command)) === "safe";
+export async function isAllowedCommand(command: string): Promise<boolean> {
+  return (await classifyKnownCommand(command)) === "allow";
 }

@@ -14,8 +14,8 @@ const classifier = createClassifier({
   },
 });
 
-const runClassification = async (command: string, prompt?: string) =>
-  (await classifier).classify({ command, prompt });
+const runClassification = async (command: string, lastUserPrompt?: string) =>
+  (await classifier).classify({ command, lastUserPrompt });
 
 describe("when classifying safe git commands with the real model", () => {
   it("should be fine for `git log`", async () => {
