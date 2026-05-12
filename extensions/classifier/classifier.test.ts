@@ -9,8 +9,8 @@ const classifier = createClassifier({
   authStorage,
   modelRegistry,
   modelIdentifier: {
-    provider: "lmstudio",
-    id: "qwen3.5-4b-mxfp8",
+    provider: "omlx",
+    id: "gemma-4-e4b-it-mxfp8",
   },
 });
 
