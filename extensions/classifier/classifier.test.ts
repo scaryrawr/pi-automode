@@ -9,8 +9,8 @@ const classifier = createClassifier({
   authStorage,
   modelRegistry,
   modelIdentifier: {
-    provider: "omlx",
-    id: "gemma-4-e4b-it-mxfp8",
+    provider: process.env.AUTOMODE_TEST_PROVIDER ?? "omlx",
+    id: process.env.AUTOMODE_TEST_MODEL ?? "gemma-4-e4b-it-mxfp4",
   },
 });
 

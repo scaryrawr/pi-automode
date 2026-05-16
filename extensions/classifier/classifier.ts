@@ -1,17 +1,18 @@
-import type {
-  AgentSession,
-  CreateAgentSessionOptions,
-  ToolCallEventResult,
-} from "@earendil-works/pi-coding-agent";
 import {
-  createAgentSession,
+  completeSimple,
+  type AssistantMessage,
+  type SimpleStreamOptions,
+  type ToolCall,
+} from "@earendil-works/pi-ai";
+import {
   DefaultResourceLoader,
-  defineTool,
   getAgentDir,
-  SessionManager,
-  SettingsManager,
+  type AuthStorage,
+  type ModelRegistry,
+  type ToolCallEventResult,
 } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
+import { Compile } from "typebox/compile";
 
 import { classifyKnownCommand } from "./safe-command.js";
 
@@ -34,47 +35,145 @@ export const classifyResultSchema = Type.Object(
 
 export type ClassifierCallback = (result: Omit<ToolCallEventResult, "tool">) => void;
 
+const CLASSIFY_TOOL_NAME = "classify_shell_command";
 const CLASSIFICATION_TIMEOUT_MS = 20_000;
+const CLASSIFIER_SYSTEM_PROMPT = `You are a shell command safety classifier. Call classify_shell_command exactly once. Do not answer in text.
 
-export type CreateClassifierOptions = Required<
-  Pick<CreateAgentSessionOptions, "authStorage" | "modelRegistry">
-> & {
-  modelIdentifier: {
-    provider: string;
-    id: string;
-  };
-};
+Decision rule: default allow. Block only clear security/safety harm. If any chained command is blocked, block everything.
 
-type Deferred<T> = {
-  promise: Promise<T>;
-  readonly settled: boolean;
-  resolve: (value: T | PromiseLike<T>) => void;
+Block when the command would:
+- Destroy, truncate, or irreversibly overwrite existing local files the agent did not create.
+- Force-push, delete remote refs, rewrite remote history, or run destructive git cleanup/reset.
+- Download/clone untrusted code and execute it, eval code, or run unsafe deserializers.
+- Write to prod/shared/cloud/remote infra without explicit latest-prompt consent, skip previews/dry-runs, or disrupt other users' jobs/resources.
+- Expose local services/host paths, add persistence (SSH keys, profiles, cron/systemd, git hooks), or exfiltrate secrets/data.
+- Bypass this classifier or delegate a blocked action to another tool/agent.
+
+Allow read-only commands, ordinary local project edits, dependency installs from existing manifests, fake test credentials, and normal git add/commit/status/diff/log/branch/switch/merge/rebase-without-force/tag/push-current-branch.
+
+Use classification "allow" for allowed commands. Use "block" with a short reason for blocked commands.`;
+
+const ClassifyResultSchema = Compile(classifyResultSchema);
+
+type ClassifyResult = Static<typeof classifyResultSchema>;
+
+/**
+ * Builds the single-turn classifier prompt.
+ * @param command - The shell command to classify.
+ * @param lastUserPrompt - Latest user prompt for intent context.
+ * @returns Prompt text for the classifier model.
+ */
+const buildPrompt = (command: string, lastUserPrompt?: string): string => {
+  const userPrompt = lastUserPrompt
+    ? `<last-user-prompt>\n${lastUserPrompt}\n</last-user-prompt>`
+    : "<last-user-prompt>(none)</last-user-prompt>";
+
+  return `Evaluate this shell command and call ${CLASSIFY_TOOL_NAME} once.
+
+## Latest User Prompt
+${userPrompt}
+
+## Command
+<shell-command>${command}</shell-command>`;
 };
 
 /**
- * Creates a deferred promise that can be resolved externally.
- * @typeparam T - The type of the deferred value.
- * @returns A deferred object with promise, resolve, and settled properties.
+ * Checks whether a response content block is the classifier tool call.
+ * @param block - Assistant message content block.
+ * @returns True when the block is a classify_shell_command tool call.
  */
-const createDeferred = <T>(): Deferred<T> => {
-  let settled = false;
-  let resolvePromise!: (value: T | PromiseLike<T>) => void;
+const isClassifierToolCall = (block: AssistantMessage["content"][number]): block is ToolCall => {
+  return block.type === "toolCall" && block.name === CLASSIFY_TOOL_NAME;
+};
 
-  const promise = new Promise<T>((res) => {
-    resolvePromise = res;
+/**
+ * Converts validated classifier tool arguments into a tool-call event result.
+ * @param params - Validated classifier parameters.
+ * @returns The block/allow result expected by pi's tool_call event.
+ */
+const classificationFromParams = (params: ClassifyResult): ToolCallEventResult => {
+  switch (params.classification) {
+    case "allow":
+      return { block: false };
+    default:
+      return {
+        block: true,
+        reason: params.reason ?? "Classified unsafe to autoapprove by classifier",
+      };
+  }
+};
+
+/**
+ * Extracts the classifier decision from a direct model response.
+ * @param response - Assistant message returned by completeSimple.
+ * @returns The block/allow result expected by pi's tool_call event.
+ */
+const classificationFromResponse = (response: AssistantMessage): ToolCallEventResult => {
+  if (response.stopReason === "error") {
+    return {
+      block: true,
+      reason: response.errorMessage ?? "Classifier request failed",
+    };
+  }
+
+  const toolCall = response.content.find(isClassifierToolCall);
+  if (!toolCall) {
+    return {
+      block: true,
+      reason: "No classification result",
+    };
+  }
+
+  try {
+    return classificationFromParams(
+      ClassifyResultSchema.Parse(toolCall.arguments) as ClassifyResult,
+    );
+  } catch (error) {
+    return {
+      block: true,
+      reason:
+        error instanceof Error
+          ? `Invalid classification result: ${error.message}`
+          : "Invalid classification result",
+    };
+  }
+};
+
+/**
+ * Loads configured extensions and applies provider registrations to the classifier model registry.
+ * @param modelRegistry - Registry to receive provider registrations discovered from extensions.
+ */
+const loadConfiguredProviders = async (modelRegistry: ModelRegistry): Promise<void> => {
+  const agentDir = getAgentDir();
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: agentDir,
+    agentDir,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true,
+    systemPrompt: CLASSIFIER_SYSTEM_PROMPT,
   });
 
-  return {
-    promise,
-    get settled() {
-      return settled;
-    },
-    resolve(value) {
-      if (settled) return;
+  await resourceLoader.reload();
 
-      settled = true;
-      resolvePromise(value);
-    },
+  const { pendingProviderRegistrations } = resourceLoader.getExtensions().runtime;
+  for (const { name, config } of pendingProviderRegistrations) {
+    try {
+      modelRegistry.registerProvider(name, config);
+    } catch {
+      // Match pi's extension runner behavior: one bad provider registration must not
+      // prevent other configured providers from becoming available.
+    }
+  }
+};
+
+export type CreateClassifierOptions = {
+  authStorage: AuthStorage;
+  modelRegistry: ModelRegistry;
+  modelIdentifier: {
+    provider: string;
+    id: string;
   };
 };
 
@@ -95,122 +194,14 @@ export type Classifier = {
 };
 
 export const createClassifier = async (options: CreateClassifierOptions): Promise<Classifier> => {
-  const { authStorage, modelRegistry, modelIdentifier } = options;
+  const { modelRegistry, modelIdentifier } = options;
 
-  const resourceLoader = new DefaultResourceLoader({
-    cwd: getAgentDir(),
-    agentDir: getAgentDir(),
-    noSkills: true,
-    noPromptTemplates: true,
-    noThemes: true,
-    noContextFiles: true,
-    systemPrompt: `You are a shell command safety classifier. Call classify_shell_command exactly once. Do not answer in text.
-
-Decision rule: default allow. Block only clear security/safety harm. If any chained command is blocked, block everything.
-
-Block when the command would:
-- Destroy, truncate, or irreversibly overwrite existing local files the agent did not create.
-- Force-push, delete remote refs, rewrite remote history, or run destructive git cleanup/reset.
-- Download/clone untrusted code and execute it, eval code, or run unsafe deserializers.
-- Write to prod/shared/cloud/remote infra without explicit latest-prompt consent, skip previews/dry-runs, or disrupt other users' jobs/resources.
-- Expose local services/host paths, add persistence (SSH keys, profiles, cron/systemd, git hooks), or exfiltrate secrets/data.
-- Bypass this classifier or delegate a blocked action to another tool/agent.
-
-Allow read-only commands, ordinary local project edits, dependency installs from existing manifests, fake test credentials, and normal git add/commit/status/diff/log/branch/switch/merge/rebase-without-force/tag/push-current-branch.
-
-Use classification "allow" for allowed commands. Use "block" with a short reason for blocked commands.`,
-  });
-
-  await resourceLoader.reload();
-
-  /**
-   * Creates a fresh in-memory agent session for a single classification call.
-   */
-  const createSession = async (
-    classificationResult: Deferred<ToolCallEventResult>,
-  ): Promise<AgentSession> => {
-    const { session } = await createAgentSession({
-      authStorage,
-      modelRegistry,
-      sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory(),
-      resourceLoader,
-      tools: ["classify_shell_command"],
-      thinkingLevel: "low",
-      customTools: [
-        defineTool({
-          name: "classify_shell_command",
-          label: "Shell call classifier",
-          description: "Classify a shell tool as allow or block to run.",
-          parameters: classifyResultSchema,
-          /**
-           * Handles the classify_shell_command tool call by resolving the current classification.
-           * @param _toolCallId - The tool call ID (unused).
-           * @param params - The classification result params from the AI model.
-           * @param signal - Abort signal from the caller; check for abort to short-circuit.
-           * @param _onUpdate - Update callback (unused).
-           * @param _ctx - Tool context (unused).
-           * @returns The tool call result with classification details.
-           */
-          execute: async (_toolCallId, params, signal, _onUpdate, _ctx) => {
-            // If the caller has aborted, short-circuit classification
-            const abortClassification = () => {
-              classificationResult.resolve({
-                block: true,
-                reason: "Classification cancelled",
-              });
-            };
-
-            signal?.addEventListener("abort", abortClassification, {
-              once: true,
-            });
-
-            try {
-              switch (params.classification) {
-                case "allow":
-                  classificationResult.resolve({ block: false });
-                  return {
-                    content: [],
-                    details: {
-                      classification: params.classification,
-                    },
-                  };
-                default:
-                  classificationResult.resolve({
-                    block: true,
-                    reason: params.reason ?? "Classified unsafe to autoapprove by classifier",
-                  });
-                  return {
-                    content: [],
-                    details: {
-                      classification: params.classification,
-                      reason: params.reason,
-                    },
-                  };
-              }
-            } finally {
-              signal?.removeEventListener("abort", abortClassification);
-            }
-          },
-        }),
-      ],
-    });
-
-    const model = session.modelRegistry.find(modelIdentifier.provider, modelIdentifier.id);
-    if (!model) {
-      session.dispose();
-      throw Error("Model not found");
-    }
-
-    await session.setModel(model);
-    return session;
-  };
+  await loadConfiguredProviders(modelRegistry);
 
   return {
     /**
-     * Classifies a shell command as allow or block using an AI agent.
-     * Submits the command to the classifier model and waits for the classification result.
-     * Creates a fresh session per call.
+     * Classifies a shell command as allow or block using a direct model completion.
+     * Submits the command to the classifier model and reads the classification tool call.
      * @returns A Promise resolving to the ToolCallEventResult with block/allow decision and reason.
      */
     classify: async (
@@ -229,7 +220,6 @@ Use classification "allow" for allowed commands. Use "block" with a short reason
         };
       }
 
-      let session: AgentSession | undefined;
       if (signal?.aborted) {
         return {
           block: true,
@@ -237,90 +227,108 @@ Use classification "allow" for allowed commands. Use "block" with a short reason
         };
       }
 
-      const classificationResult = createDeferred<ToolCallEventResult>();
-      const resolveFailClosed = (reason: string) => {
-        classificationResult.resolve({
+      const model = modelRegistry.find(modelIdentifier.provider, modelIdentifier.id);
+      if (!model) {
+        return {
           block: true,
-          reason,
-        });
-      };
-      const abortSession = () => {
-        if (!session) {
+          reason: "Model not found",
+        };
+      }
+
+      const requestController = new AbortController();
+      let abortReason: string | undefined;
+      const abortClassification = (reason: string) => {
+        if (requestController.signal.aborted) {
           return;
         }
 
-        void session.abort().catch(() => undefined);
-      };
-      const abortClassification = () => {
-        resolveFailClosed("Classification cancelled");
-        abortSession();
+        abortReason = reason;
+        requestController.abort();
       };
 
-      let promptSettled = false;
+      const timeoutReason = `Classifier timed out after ${CLASSIFICATION_TIMEOUT_MS / 1000}s`;
       const timeout = setTimeout(() => {
-        resolveFailClosed(`Classifier timed out after ${CLASSIFICATION_TIMEOUT_MS / 1000}s`);
-        abortSession();
+        abortClassification(timeoutReason);
       }, CLASSIFICATION_TIMEOUT_MS);
+      const abortFromSignal = () => {
+        abortClassification("Classification cancelled");
+      };
 
-      signal?.addEventListener("abort", abortClassification, { once: true });
-      try {
-        const sessionPromise = createSession(classificationResult)
-          .then((createdSession) => {
-            if (classificationResult.settled) {
-              void createdSession.abort().catch(() => undefined);
-              createdSession.dispose();
-              return undefined;
-            }
+      signal?.addEventListener("abort", abortFromSignal, { once: true });
 
-            session = createdSession;
-            return createdSession;
-          })
-          .catch((error: unknown) => {
-            resolveFailClosed(error instanceof Error ? error.message : String(error));
-            return undefined;
-          });
+      const abortResult = (): ToolCallEventResult => ({
+        block: true,
+        reason: abortReason ?? "Classification cancelled",
+      });
+      let removeAbortResultListener = () => {};
+      const abortPromise = new Promise<ToolCallEventResult>((resolve) => {
+        const resolveAbort = () => {
+          resolve(abortResult());
+        };
 
-        const createdSession = await Promise.race([
-          sessionPromise,
-          classificationResult.promise.then(() => undefined),
-        ]);
-        if (!createdSession || classificationResult.settled) {
-          return await classificationResult.promise;
+        if (requestController.signal.aborted) {
+          resolveAbort();
+          return;
         }
 
-        const prompt = [
-          `Evaluate this shell command and call classify_shell_command once.
+        requestController.signal.addEventListener("abort", resolveAbort, { once: true });
+        removeAbortResultListener = () => {
+          requestController.signal.removeEventListener("abort", resolveAbort);
+        };
+      });
 
-## Latest User Prompt
-${
-  lastUserPrompt
-    ? `<last-user-prompt>
-${lastUserPrompt}
-</last-user-prompt>`
-    : "<last-user-prompt>(none)</last-user-prompt>"
-}
+      try {
+        const auth = await Promise.race([modelRegistry.getApiKeyAndHeaders(model), abortPromise]);
+        if (!("ok" in auth)) {
+          return auth;
+        }
+        if (!auth.ok) {
+          return { block: true, reason: auth.error };
+        }
 
-## Command
-<shell-command>${command}</shell-command>`,
-          "",
-        ].join("\n");
+        const requestOptions: SimpleStreamOptions = {
+          reasoning: "low",
+          signal: requestController.signal,
+        };
+        if (auth.apiKey !== undefined) {
+          requestOptions.apiKey = auth.apiKey;
+        }
+        if (auth.headers !== undefined) {
+          requestOptions.headers = auth.headers;
+        }
 
-        void createdSession
-          .prompt(prompt, { expandPromptTemplates: false })
-          .then(() => {
-            promptSettled = true;
-            if (!classificationResult.settled) {
-              resolveFailClosed("No classification result");
-            }
-          })
-          .catch((error: unknown) => {
-            promptSettled = true;
-            if (!classificationResult.settled) {
-              resolveFailClosed(error instanceof Error ? error.message : String(error));
-            }
-          });
+        const responsePromise = completeSimple(
+          model,
+          {
+            systemPrompt: CLASSIFIER_SYSTEM_PROMPT,
+            messages: [
+              {
+                role: "user",
+                content: buildPrompt(command, lastUserPrompt),
+                timestamp: Date.now(),
+              },
+            ],
+            tools: [
+              {
+                name: CLASSIFY_TOOL_NAME,
+                description: "Classify a shell tool as allow or block to run.",
+                parameters: classifyResultSchema,
+              },
+            ],
+          },
+          requestOptions,
+        ).then((response): ToolCallEventResult => {
+          if (requestController.signal.aborted || response.stopReason === "aborted") {
+            return {
+              block: true,
+              reason: abortReason ?? response.errorMessage ?? "Classification cancelled",
+            };
+          }
 
-        return await classificationResult.promise;
+          return classificationFromResponse(response);
+        });
+
+        return await Promise.race([responsePromise, abortPromise]);
       } catch (error) {
         return {
           block: true,
@@ -328,11 +336,8 @@ ${lastUserPrompt}
         };
       } finally {
         clearTimeout(timeout);
-        signal?.removeEventListener("abort", abortClassification);
-        if (!promptSettled) {
-          abortSession();
-        }
-        session?.dispose();
+        signal?.removeEventListener("abort", abortFromSignal);
+        removeAbortResultListener();
       }
     },
   };

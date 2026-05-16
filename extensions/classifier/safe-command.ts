@@ -91,8 +91,10 @@ const INTERACTIVE_EDITORS = new Set([
 ]);
 
 const GIT_SAFE_SUBCOMMANDS = new Set([
+  "add",
   "branch",
   "describe",
+  "commit",
   "diff",
   "fetch",
   "for-each-ref",
@@ -264,6 +266,16 @@ const classifyGitCommand = (args: string[]): KnownCommandClassification => {
 
   if (subcommand === "branch") {
     return args.some((arg) => arg === "-D" || arg.includes("D")) ? "block" : "allow";
+  }
+
+  if (subcommand === "commit" && args.includes("--amend")) {
+    return "unknown";
+  }
+
+  if (subcommand === "switch") {
+    return args.some((arg) => ["-C", "-f", "--discard-changes", "--force"].includes(arg))
+      ? "unknown"
+      : "allow";
   }
 
   if (subcommand === "rebase" || subcommand === "filter-branch") {
