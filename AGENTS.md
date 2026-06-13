@@ -9,14 +9,15 @@ This repo implements the **automode extension** for the pi coding agent — an A
 - `extensions/automode.ts` — Extension entry point. Registers the `automodel` command and subscribes to `tool_call` events, delegating bash commands to the classifier.
 - `extensions/automode/config.ts` — Reads/writes `automode.json` from the agent's config directory. Uses TypeBox for schema validation.
 - `extensions/automode/types.ts` — Shared type: `ModelIdentifier = { provider: string, id: string }`.
-- `extensions/classifier/classifier.ts` — Core classifier: spins up an in-memory agent session with a custom `classify_shell_command` tool. The model classifies commands as `safe`, `ask`, or `dangerous` and resolves a deferred `ToolCallEventResult`.
+- `extensions/classifier/classifier.ts` — Core classifier: uses direct model completion with a custom `classify_shell_command` tool. The model classifies commands as `allow` or `block` and returns a `ToolCallEventResult`.
+- `extensions/permissions/permissions.ts` — Manual permission fallback used when `/auto off`: read-only/safe calls pass, risky bash and writes outside cwd prompt the user.
+- `extensions/ui/permission-dialog.ts` — Custom TUI approval dialog for disabled-automode permission prompts.
 - `extensions/classifier/classifier.test.ts` — Integration tests against a real model (lmstudio).
 
 **Key patterns:**
 
-- Lazy initialization with cache invalidation on error (`classifier` promise reset to `undefined`).
-- Deferred resolution pattern for async tool-call results (`createDeferred` utility).
-- `SessionManager.inMemory()` + `SettingsManager.inMemory()` for zero-persistence classifier sessions.
+- Short-circuit known safe/blocked shell commands before model classification.
+- Direct `completeSimple()` classifier calls with timeout/abort handling.
 - Config stored in the shared agent directory via `getAgentDir()`, not in the repo.
 
 ## Conventions
@@ -43,5 +44,6 @@ Validation: `npm run build` must pass (zero errors). Tests: `npm test` (integrat
 ## Safety
 
 - The extension blocks bash commands deemed dangerous by the classifier model.
+- When automode is disabled, the extension prompts for permission instead of auto-approving risky bash calls; non-interactive contexts block prompt-required calls.
 - The `automodel` command (`/automodel`) persists the selected model to a JSON config file in the agent's home directory — not the repo.
 - Classifier sessions are in-memory only; no state is persisted between sessions except the model identifier.

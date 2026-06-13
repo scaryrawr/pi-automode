@@ -11,6 +11,7 @@ import type { AutocompleteItem } from "@earendil-works/pi-tui";
 
 import { AutomodeConfigManager } from "./automode/config.js";
 import { createClassifier } from "./classifier/classifier.js";
+import { handlePermissionToolCall } from "./permissions/permissions.js";
 import { ModelSelectorComponent } from "./ui/model-selector.js";
 
 type ClassifierContext = Pick<ExtensionContext, "modelRegistry">;
@@ -92,13 +93,13 @@ export default async function (pi: ExtensionAPI) {
   };
 
   pi.on("tool_call", async (event, ctx): Promise<ToolCallEventResult> => {
-    // Allow all non-bash tools by default
-    if (!isToolCallEventType("bash", event)) {
-      return { block: false };
-    }
-
     try {
       if (!automodeConfig.enabled) {
+        return handlePermissionToolCall(event, ctx);
+      }
+
+      // Allow all non-bash tools by default when automode is enabled.
+      if (!isToolCallEventType("bash", event)) {
         return { block: false };
       }
 
@@ -150,14 +151,18 @@ export default async function (pi: ExtensionAPI) {
           break;
         case "off":
           automodeConfig.enabled = false;
-          ctx.ui.notify("Auto mode disabled", "info");
+          ctx.ui.notify("Auto mode disabled; permission prompts enabled", "info");
           break;
         case "show": {
           const status = automodeConfig.enabled ? "enabled" : "disabled";
+          const permissions = automodeConfig.enabled ? "disabled" : "enabled";
           const model = activeAutoModel
             ? `${activeAutoModel.id} [${activeAutoModel.provider}]`
             : "no model configured";
-          ctx.ui.notify(`Auto mode is ${status}; model: ${model}`, "info");
+          ctx.ui.notify(
+            `Auto mode is ${status}; permission prompts: ${permissions}; model: ${model}`,
+            "info",
+          );
           break;
         }
         default:
