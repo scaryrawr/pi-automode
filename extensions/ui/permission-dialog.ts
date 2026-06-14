@@ -16,7 +16,6 @@ type DialogTheme = {
 export class PermissionDialog {
   container: Container;
   input: Input;
-  inputLabel: Text;
   selectedIndex: number = 0;
   cachedWidth: number | undefined;
   cachedLines: string[] | undefined;
@@ -49,10 +48,7 @@ export class PermissionDialog {
     );
     this.container.addChild(new Text("", 0, 1));
 
-    this.inputLabel = new Text(this.#theme.fg("dim", "Block reason (optional):"), 1, 0);
-    this.container.addChild(this.inputLabel);
     this.input = new Input();
-    this.container.addChild(this.input);
 
     this.container.addChild(new DynamicBorder((s: string) => this.#theme.fg("warning", s)));
   }
@@ -118,23 +114,27 @@ export class PermissionDialog {
     };
 
     const approveLine = renderButtonLine("Approve", "success", this.selectedIndex === 0);
-    const blockLine = renderButtonLine("Block", "error", this.selectedIndex === 1);
-
-    let inputLineCount = 0;
-    if (this.selectedIndex === 0) {
-      inputLineCount = this.inputLabel.render(width).length + this.input.render(width).length;
-    }
 
     const lines = this.container.render(width);
-    if (this.selectedIndex === 0 && inputLineCount > 0) {
-      const blankStart = Math.max(0, lines.length - 1 - inputLineCount);
-      for (let i = blankStart; i < blankStart + inputLineCount; i += 1) {
-        lines[i] = "";
-      }
+    const insertIndex = Math.max(0, lines.length - 1);
+
+    const inserted: string[] = [approveLine];
+    if (this.selectedIndex === 1) {
+      // Keep the "Block" button in place and styled the same as when it is not
+      // selected, then append the reason input to its right on the same line.
+      // This avoids the jarring shift/color change and reveals the field subtly.
+      const buttonText = "  Block  ";
+      const areaWidth = Math.max(0, width - buttonText.length);
+      const inputLine = this.input.render(areaWidth)[0] ?? "";
+      const line = this.#theme.fg("error", buttonText) + inputLine;
+      // Cap to width so narrow terminals can't overflow the line buffer.
+      const capped = truncateToWidth(line, width, "", true);
+      inserted.push(this.#theme.bg("selectedBg", capped));
+    } else {
+      inserted.push(renderButtonLine("Block", "error", false));
     }
 
-    const insertIndex = Math.max(0, lines.length - 1);
-    lines.splice(insertIndex, 0, approveLine, blockLine);
+    lines.splice(insertIndex, 0, ...inserted);
 
     this.cachedWidth = width;
     this.cachedLines = lines;
