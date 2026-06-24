@@ -2,8 +2,14 @@ import type { ToolCallEventResult } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import { Container, Input, Key, Text, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 
+/**
+ * Color keys used in the permission dialog theme.
+ */
 type DialogThemeColor = "warning" | "borderMuted" | "muted" | "text" | "dim" | "success" | "error";
 
+/**
+ * Theme interface for the permission dialog, providing formatted text functions.
+ */
 type DialogTheme = {
   fg: (color: DialogThemeColor, text: string) => string;
   bg: (color: "selectedBg", text: string) => string;
@@ -14,16 +20,31 @@ type DialogTheme = {
  * Permission dialog component for manually approving blocked automode fallback tool calls.
  */
 export class PermissionDialog {
+  /** The container holding all dialog elements. */
   container: Container;
+  /** The input field for the block reason. */
   input: Input;
+  /** Currently selected button index (0 = Approve, 1 = Block). */
   selectedIndex: number = 0;
+  /** Cached render width for the last render call. */
   cachedWidth: number | undefined;
+  /** Cached rendered lines for the current width. */
   cachedLines: string[] | undefined;
+  /** Callback invoked when the user makes a decision (approve or block). */
   onDone: ((result: ToolCallEventResult) => void) | undefined;
+  /** The name of the tool requiring permission. */
   #toolName: string;
+  /** Description of the tool input being reviewed. */
   #inputDescription: string;
+  /** Theme object for formatting text. */
   #theme: DialogTheme;
 
+  /**
+   * Creates a new permission dialog.
+   * @param toolName - The name of the tool requiring permission.
+   * @param inputDescription - Description of the tool input.
+   * @param theme - Theme object for text formatting.
+   */
   constructor(toolName: string, inputDescription: string, theme: DialogTheme) {
     this.#toolName = toolName;
     this.#inputDescription = inputDescription;
@@ -53,6 +74,11 @@ export class PermissionDialog {
     this.container.addChild(new DynamicBorder((s: string) => this.#theme.fg("warning", s)));
   }
 
+  /**
+   * Handles keyboard input for the dialog.
+   * @param data - The key data string.
+   * @param tui - TUI instance for requesting a re-render.
+   */
   handleInput(data: string, tui: { requestRender: () => void }): void {
     if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
       this.onDone?.({
@@ -98,6 +124,11 @@ export class PermissionDialog {
     }
   }
 
+  /**
+   * Renders the dialog to an array of formatted lines.
+   * @param width - The terminal width.
+   * @returns Array of formatted lines.
+   */
   render(width: number): string[] {
     if (this.cachedLines && this.cachedWidth === width) {
       return this.cachedLines;
@@ -141,6 +172,9 @@ export class PermissionDialog {
     return lines;
   }
 
+  /**
+   * Invalidates the cached render output.
+   */
   invalidate(): void {
     this.cachedWidth = undefined;
     this.cachedLines = undefined;

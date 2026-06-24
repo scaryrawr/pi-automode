@@ -68,6 +68,11 @@ const getLastUserPrompt = (entries: SessionEntry[]): string => {
   return "";
 };
 
+/**
+ * Extension entry point that registers the automode bash command classifier and /auto, /automodel commands.
+ * Subscribes to tool_call events and either auto-approves or prompts for permission based on config.
+ * @param pi - The extension API.
+ */
 export default async function (pi: ExtensionAPI) {
   const automodeConfig = new AutomodeConfigManager();
   let activeAutoModel = automodeConfig.modelIdentifier;

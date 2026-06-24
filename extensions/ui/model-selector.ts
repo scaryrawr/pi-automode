@@ -16,9 +16,15 @@ import {
   truncateToWidth,
 } from "@earendil-works/pi-tui";
 
+/**
+ * Internal model item type combining provider, id, and model reference.
+ */
 interface ModelItem {
+  /** The model provider name. */
   provider: string;
+  /** The model id. */
   id: string;
+  /** The full model reference. */
   model: Model<Api>;
 }
 
@@ -52,9 +58,11 @@ export interface ModelSelectorOptions {
  * - Scroll indicator when list overflows visible area
  */
 export class ModelSelectorComponent extends Container implements Focusable {
+  /** The search input field for fuzzy filtering. */
   private searchInput: Input;
 
   // Focusable implementation - propagate to searchInput for IME cursor positioning
+  /** Whether the component is focused (propagates to searchInput). */
   private _focused = false;
   get focused(): boolean {
     return this._focused;
@@ -64,19 +72,37 @@ export class ModelSelectorComponent extends Container implements Focusable {
     this.searchInput.focused = value;
   }
 
+  /** Container holding the list of model items. */
   private listContainer: Container;
+  /** All available models from the registry. */
   private allModels: ModelItem[] = [];
+  /** Models filtered and sorted for display. */
   private activeModels: ModelItem[] = [];
+  /** Models filtered by the current search query. */
   private filteredModels: ModelItem[] = [];
+  /** Currently selected item index in filteredModels. */
   private selectedIndex: number = 0;
+  /** The currently active/selected model (shown with a checkmark). */
   private currentModel: Model<Api> | undefined;
+  /** The model registry to load available models from. */
   private modelRegistry: ModelRegistry;
+  /** Callback invoked when a model is selected. */
   private onSelectCallback: (model: Model<Api>) => void;
+  /** Callback invoked when the user cancels. */
   private onCancelCallback: () => void;
+  /** Error message if models failed to load. */
   private errorMessage?: string;
+  /** The TUI instance for requesting renders. */
   private tui: TUI;
+  /** The theme object for formatting text. */
   private theme: Theme;
 
+  /**
+   * Creates a new model selector component.
+   * @param tui - The TUI instance.
+   * @param theme - The theme object.
+   * @param options - Configuration options.
+   */
   constructor(tui: TUI, theme: Theme, options: ModelSelectorOptions) {
     super();
 
@@ -137,6 +163,9 @@ export class ModelSelectorComponent extends Container implements Focusable {
     this.tui.requestRender();
   }
 
+  /**
+   * Loads available models from the registry and sorts them.
+   */
   private loadModels(): void {
     // Refresh to pick up any changes to models
     this.modelRegistry.refresh();
@@ -172,6 +201,11 @@ export class ModelSelectorComponent extends Container implements Focusable {
         : Math.min(this.selectedIndex, Math.max(0, this.filteredModels.length - 1));
   }
 
+  /**
+   * Sorts models: current model first, then by provider name.
+   * @param models - The models to sort.
+   * @returns The sorted models.
+   */
   private sortModels(models: ModelItem[]): ModelItem[] {
     const sorted = [...models];
     // Sort: current model first, then by provider
@@ -185,6 +219,10 @@ export class ModelSelectorComponent extends Container implements Focusable {
     return sorted;
   }
 
+  /**
+   * Filters models by fuzzy search query.
+   * @param query - The search query.
+   */
   private filterModels(query: string): void {
     this.filteredModels = query
       ? fuzzyFilter(
@@ -197,6 +235,9 @@ export class ModelSelectorComponent extends Container implements Focusable {
     this.updateList();
   }
 
+  /**
+   * Re-renders the visible list of models.
+   */
   private updateList(): void {
     this.listContainer.clear();
 
@@ -263,6 +304,10 @@ export class ModelSelectorComponent extends Container implements Focusable {
     }
   }
 
+  /**
+   * Handles keyboard input for navigation and selection.
+   * @param keyData - The key data string.
+   */
   handleInput(keyData: string): void {
     const kb = getKeybindings();
     // Up arrow - wrap to bottom when at top
@@ -300,10 +345,18 @@ export class ModelSelectorComponent extends Container implements Focusable {
     }
   }
 
+  /**
+   * Invokes the select callback with the chosen model.
+   * @param model - The selected model.
+   */
   private handleSelect(model: Model<Api>): void {
     this.onSelectCallback(model);
   }
 
+  /**
+   * Returns the search input component.
+   * @returns The search input field.
+   */
   getSearchInput(): Input {
     return this.searchInput;
   }

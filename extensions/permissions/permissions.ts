@@ -12,6 +12,9 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { classifyKnownCommand } from "../classifier/safe-command.js";
 import { PermissionDialog } from "../ui/permission-dialog.js";
 
+/**
+ * Context type for permission handling, containing cwd, UI availability, and UI reference.
+ */
 type PermissionContext = Pick<ExtensionContext, "cwd" | "hasUI" | "ui">;
 
 export type PermissionPrompt = {
@@ -19,11 +22,25 @@ export type PermissionPrompt = {
   inputDescription: string;
 };
 
+/**
+ * Set of tool names considered read-only (safe without permission).
+ */
 const READONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
 
+/**
+ * Type guard checking whether an error is a file-not-found error.
+ * @param error - The error to check.
+ * @returns True if the error is an ENOENT error.
+ */
 const isNotFoundError = (error: unknown): error is NodeJS.ErrnoException =>
   error instanceof Error && "code" in error && error.code === "ENOENT";
 
+/**
+ * Resolves an existing path by walking up the directory tree until a real path is found.
+ * @param targetPath - The path to resolve.
+ * @returns The resolved real path.
+ * @throws If no parent directory exists.
+ */
 const resolveExistingPath = async (targetPath: string): Promise<string> => {
   try {
     return await realpath(targetPath);
@@ -41,6 +58,12 @@ const resolveExistingPath = async (targetPath: string): Promise<string> => {
   }
 };
 
+/**
+ * Checks whether childPath is inside (or equal to) parentPath.
+ * @param parentPath - The parent directory path.
+ * @param childPath - The child path to check.
+ * @returns True if child is inside parent.
+ */
 const isInsidePath = (parentPath: string, childPath: string): boolean => {
   const relativePath = relative(parentPath, childPath);
   return (
@@ -62,6 +85,12 @@ export const isPathWithinCwd = async (targetPath: string, cwd: string): Promise<
   return isInsidePath(cwdRealPath, targetResolvedPath);
 };
 
+/**
+ * Extracts a string property from an object, returning undefined if absent or non-string.
+ * @param input - The object to read from.
+ * @param key - The property key.
+ * @returns The string value, or undefined.
+ */
 const getStringProperty = (input: object, key: string): string | undefined => {
   if (!(key in input)) {
     return undefined;
@@ -71,6 +100,12 @@ const getStringProperty = (input: object, key: string): string | undefined => {
   return typeof value === "string" ? value : undefined;
 };
 
+/**
+ * Formats a tool call input into a human-readable description.
+ * @param toolName - The name of the tool.
+ * @param input - The tool input object.
+ * @returns A formatted description string.
+ */
 const formatToolInput = (toolName: string, input: object): string => {
   switch (toolName) {
     case "edit":
@@ -146,6 +181,13 @@ export const getPermissionPrompt = async (
   return undefined;
 };
 
+/**
+ * Prompts the user for permission via a custom TUI dialog.
+ * Blocks if no UI is available.
+ * @param prompt - The permission prompt metadata.
+ * @param ctx - Extension context.
+ * @returns A promise resolving to the tool call result.
+ */
 const promptForPermission = async (
   prompt: PermissionPrompt,
   ctx: PermissionContext,

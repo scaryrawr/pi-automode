@@ -17,6 +17,10 @@ import { Compile } from "typebox/compile";
 import { classifyKnownCommand } from "./safe-command.js";
 
 /** Result schema for the ${CLASSIFY_TOOL_NAME} tool, indicating if the command is allowed to run and the reason if not. */
+/**
+ * JSON schema (TypeBox) for the classify_shell_command tool result.
+ * Describes the classification (allow/block) and optional reason.
+ */
 export const classifyResultSchema = Type.Object(
   {
     classification: Type.Union([Type.Literal("allow"), Type.Literal("block")], {
@@ -33,9 +37,19 @@ export const classifyResultSchema = Type.Object(
   },
 );
 
+/**
+ * Callback type for receiving classification results.
+ * @param result - The classification result without the tool name.
+ */
 export type ClassifierCallback = (result: Omit<ToolCallEventResult, "tool">) => void;
 
+/**
+ * The name of the classifier tool used in model completions.
+ */
 const CLASSIFY_TOOL_NAME = "classify_shell_command";
+/**
+ * Timeout in milliseconds for classifier model completion requests.
+ */
 const CLASSIFICATION_TIMEOUT_MS = 20_000;
 const CLASSIFIER_SYSTEM_PROMPT = `You are a shell-command security monitor. Call ${CLASSIFY_TOOL_NAME} exactly once. Do not answer in text.
 
@@ -57,8 +71,14 @@ Allow read-only commands, ordinary local project edits, local dev servers in the
 
 Return "allow" only when no block condition applies; otherwise "block" with a short reason.`;
 
+/**
+ * Compiled validation schema for the classifier result.
+ */
 const ClassifyResultSchema = Compile(classifyResultSchema);
 
+/**
+ * Internal type for the classifier result parsed from model output.
+ */
 type ClassifyResult = Static<typeof classifyResultSchema>;
 
 /**
@@ -171,6 +191,9 @@ const loadConfiguredProviders = async (modelRegistry: ModelRegistry): Promise<vo
   }
 };
 
+/**
+ * Options required to create a classifier instance.
+ */
 export type CreateClassifierOptions = {
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
@@ -180,6 +203,9 @@ export type CreateClassifierOptions = {
   };
 };
 
+/**
+ * Options passed to the classify method.
+ */
 export type ClassifyOptions = {
   /** Command to classify */
   command: string;
@@ -187,6 +213,9 @@ export type ClassifyOptions = {
   lastUserPrompt?: string | undefined;
 };
 
+/**
+ * Classifier interface wrapping the classify method.
+ */
 export type Classifier = {
   /**
    * Classifies the command and returns a block/allow tool call result
@@ -196,6 +225,18 @@ export type Classifier = {
   classify: (params: ClassifyOptions, signal?: AbortSignal) => Promise<ToolCallEventResult>;
 };
 
+/**
+ * Creates a classifier instance configured with the given options.
+ * Loads configured provider extensions and returns a classifier.
+ * @param options - Configuration options including auth storage, model registry, and model identifier.
+ * @returns A promise resolving to the classifier instance.
+ */
+/**
+ * Creates a classifier instance configured with the given options.
+ * Loads configured provider extensions and returns a classifier.
+ * @param options - Configuration options including auth storage, model registry, and model identifier.
+ * @returns A promise resolving to the classifier instance.
+ */
 export const createClassifier = async (options: CreateClassifierOptions): Promise<Classifier> => {
   const { modelRegistry, modelIdentifier } = options;
 

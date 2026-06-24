@@ -7,6 +7,10 @@ import { Compile } from "typebox/compile";
 
 const CONFIG_FILE_NAME = "automode.json";
 
+/**
+ * JSON schema (TypeBox) defining the structure of the automode configuration file.
+ * Declares optional fields for classifier model identifier and enabled flag.
+ */
 const automodeConfigSchema = Type.Object({
   classifierModel: Type.Optional(
     Type.Object({
@@ -17,9 +21,19 @@ const automodeConfigSchema = Type.Object({
   enabled: Type.Optional(Type.Boolean()),
 });
 
+/**
+ * Compiled validation schema for the automode configuration file.
+ */
 const AutomodeConfigSchema = Compile(automodeConfigSchema);
 
+/**
+ * Internal type representing the full automode configuration object.
+ */
 type AutomodeConfig = Static<typeof automodeConfigSchema>;
+
+/**
+ * Represents a model identifier with provider and model id.
+ */
 export type ModelIdentifier = Required<AutomodeConfig>["classifierModel"];
 
 /**
@@ -49,9 +63,17 @@ const readConfig = (): AutomodeConfig | undefined => {
 /**
  * Manages the automode configuration file.
  */
+/**
+ * Manages reading, writing, and accessing the automode configuration file (automode.json).
+ * Persists configuration to the agent's config directory.
+ */
 export class AutomodeConfigManager {
+  /** Internal configuration state loaded from disk. */
   private config: AutomodeConfig;
 
+  /**
+   * Initializes the config manager by reading the existing config file.
+   */
   constructor() {
     this.config = readConfig() ?? {};
   }

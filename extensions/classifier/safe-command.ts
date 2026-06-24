@@ -12,12 +12,19 @@ import path from "node:path";
 
 import { Language, Parser, type Node } from "web-tree-sitter";
 
+/**
+ * Classification result for a shell command that can be evaluated without LLM classification.
+ * "allow" means safe to run, "block" means dangerous, "unknown" requires LLM review.
+ */
 export type KnownCommandClassification = "allow" | "block" | "unknown";
 
 const require = createRequire(import.meta.url);
 
 let parserPromise: Promise<Parser> | undefined;
 
+/**
+ * Set of shell commands considered safe (read-only, benign utilities).
+ */
 const SAFE_COMMANDS = new Set([
   "awk",
   "bat",
@@ -60,6 +67,9 @@ const SAFE_COMMANDS = new Set([
   "whoami",
 ]);
 
+/**
+ * Set of shell commands considered dangerous (destructive, privilege escalation, etc.).
+ */
 const DANGEROUS_COMMANDS = new Set([
   ".",
   "dd",
@@ -79,6 +89,9 @@ const DANGEROUS_COMMANDS = new Set([
   "truncate",
 ]);
 
+/**
+ * Set of interactive text editor commands (blocking because they hijack the terminal).
+ */
 const INTERACTIVE_EDITORS = new Set([
   "code",
   "emacs",
@@ -90,6 +103,9 @@ const INTERACTIVE_EDITORS = new Set([
   "vim",
 ]);
 
+/**
+ * Set of git subcommands considered safe (read-only operations, local commits, etc.).
+ */
 const GIT_SAFE_SUBCOMMANDS = new Set([
   "add",
   "branch",
@@ -107,14 +123,26 @@ const GIT_SAFE_SUBCOMMANDS = new Set([
   "status",
 ]);
 
+/**
+ * Map of package manager names to their safe (read-only) subcommands.
+ */
 const PACKAGE_SAFE_SUBCOMMANDS = new Map([
   ["npm", new Set(["audit", "info", "list", "ls", "outdated", "search", "show", "view"])],
   ["pip", new Set(["freeze", "inspect", "list", "show"])],
   ["yarn", new Set(["audit", "info", "list", "show", "why"])],
 ]);
 
+/**
+ * Set of shell interpreters (executing code via -c is dangerous).
+ */
 const SHELL_COMMANDS = new Set(["bash", "sh", "zsh"]);
+/**
+ * Set of commands that are safe when invoked with --version/-v flags.
+ */
 const VERSION_COMMANDS = new Set(["git", "node", "npm", "python"]);
+/**
+ * Set of git options that take a value argument (skip the next arg during subcommand detection).
+ */
 const GIT_OPTIONS_WITH_VALUES = new Set([
   "--exec-path",
   "--git-dir",
@@ -125,6 +153,10 @@ const GIT_OPTIONS_WITH_VALUES = new Set([
   "-c",
 ]);
 
+/**
+ * Lazily initializes and returns a tree-sitter Parser configured for bash.
+ * @returns A promise resolving to the configured bash parser.
+ */
 const createParser = async (): Promise<Parser> => {
   await Parser.init({
     locateFile: () => require.resolve("web-tree-sitter/tree-sitter.wasm"),
@@ -140,6 +172,10 @@ const createParser = async (): Promise<Parser> => {
   return parser;
 };
 
+/**
+ * Returns the lazily-initialized bash parser, caching it for reuse.
+ * @returns A promise resolving to the configured bash parser.
+ */
 const getParser = (): Promise<Parser> => {
   parserPromise ??= createParser().catch((error: unknown) => {
     parserPromise = undefined;
@@ -149,14 +185,30 @@ const getParser = (): Promise<Parser> => {
   return parserPromise;
 };
 
+/**
+ * Type guard checking whether a tree-sitter Node is non-null.
+ * @param node - The node to check.
+ * @returns True when the node is non-null.
+ */
 const isNode = (node: Node | null): node is Node => node !== null;
 
+/**
+ * Normalizes a command name by trimming whitespace and extracting the basename,
+ * then lowercasing it.
+ * @param commandName - Raw command name from the AST.
+ * @returns The normalized (lowercase, basename) command name.
+ */
 const normalizeCommandName = (commandName: string): string => {
   const trimmed = commandName.trim();
   const basename = trimmed.includes("/") ? path.posix.basename(trimmed) : trimmed;
   return basename.toLowerCase();
 };
 
+/**
+ * Extracts the command name and arguments from a tree-sitter command node.
+ * @param commandNode - The tree-sitter command node.
+ * @returns An object with the normalized command name and argument strings, or undefined if no name exists.
+ */
 const getCommandParts = (commandNode: Node): { name: string; args: string[] } | undefined => {
   const name = commandNode.childForFieldName("name");
   if (!name) {
@@ -172,11 +224,25 @@ const getCommandParts = (commandNode: Node): { name: string; args: string[] } | 
   };
 };
 
+/**
+ * Set of output redirect operators that redirect to a file path.
+ */
 const OUTPUT_REDIRECT_OPERATORS = new Set([">", ">>", ">|", ">&", ">&-", "&>", "&>>"]);
 
+/**
+ * Extracts the redirect operator type from a redirect node.
+ * @param redirect - The tree-sitter redirect node.
+ * @returns The operator type string, or undefined if no operator is found.
+ */
 const getRedirectOperator = (redirect: Node): string | undefined =>
   redirect.children.filter(isNode).find((child) => OUTPUT_REDIRECT_OPERATORS.has(child.type))?.type;
 
+/**
+ * Extracts a literal redirect destination (file path) from a redirect node.
+ * Handles word, raw_string, and string node types.
+ * @param destination - The tree-sitter destination node.
+ * @returns The literal destination string, or undefined if not extractable.
+ */
 const getLiteralRedirectDestination = (destination: Node | null): string | undefined => {
   if (!destination) {
     return undefined;
@@ -196,6 +262,11 @@ const getLiteralRedirectDestination = (destination: Node | null): string | undef
   return undefined;
 };
 
+/**
+ * Determines whether an output redirect is safe (redirects to /dev/null or fd-only).
+ * @param redirect - The tree-sitter file redirect node.
+ * @returns True if the redirect is safe.
+ */
 const isSafeOutputRedirect = (redirect: Node): boolean => {
   const operator = getRedirectOperator(redirect);
   if (!operator) {
@@ -212,12 +283,22 @@ const isSafeOutputRedirect = (redirect: Node): boolean => {
   return getLiteralRedirectDestination(redirect.childForFieldName("destination")) === "/dev/null";
 };
 
+/**
+ * Checks whether any file redirect in a command tree is unsafe.
+ * @param root - The tree-sitter root node of the parsed command.
+ * @returns True if any redirect is unsafe.
+ */
 const hasUnsafeOutputRedirect = (root: Node): boolean =>
   root
     .descendantsOfType("file_redirect")
     .filter(isNode)
     .some((redirect) => !isSafeOutputRedirect(redirect));
 
+/**
+ * Extracts the git subcommand from an argument list, skipping options with values.
+ * @param args - The command arguments.
+ * @returns The git subcommand (lowercase), or undefined if none found.
+ */
 const getGitSubcommand = (args: string[]): string | undefined => {
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
@@ -240,6 +321,11 @@ const getGitSubcommand = (args: string[]): string | undefined => {
   return undefined;
 };
 
+/**
+ * Classifies a git command based on its subcommand and arguments.
+ * @param args - The git command arguments.
+ * @returns The classification result.
+ */
 const classifyGitCommand = (args: string[]): KnownCommandClassification => {
   if (args.includes("--version")) {
     return "allow";
@@ -304,6 +390,12 @@ const classifyGitCommand = (args: string[]): KnownCommandClassification => {
   return GIT_SAFE_SUBCOMMANDS.has(subcommand) || subcommand.startsWith("ls-") ? "allow" : "unknown";
 };
 
+/**
+ * Classifies a package manager command based on its subcommand.
+ * @param name - The package manager name (npm, pip, yarn).
+ * @param args - The command arguments.
+ * @returns The classification result, or undefined if not a known package manager.
+ */
 const classifyPackageCommand = (
   name: string,
   args: string[],
@@ -320,6 +412,13 @@ const classifyPackageCommand = (
   return undefined;
 };
 
+/**
+ * Classifies a single command node (one command in a pipeline/chain).
+ * Handles dangerous commands, interactive editors, shells, systemctl, service, git,
+ * package managers, sed, find, awk, and version flags.
+ * @param commandNode - The tree-sitter command node.
+ * @returns The classification result.
+ */
 const classifyCommandNode = (commandNode: Node): KnownCommandClassification => {
   const parts = getCommandParts(commandNode);
   if (!parts) {
