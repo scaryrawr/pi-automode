@@ -12,6 +12,7 @@ import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { AutomodeConfigManager } from "./automode/config.js";
 import { createClassifier } from "./classifier/classifier.js";
 import { handlePermissionToolCall } from "./permissions/permissions.js";
+import { classifyKnownCommand } from "./classifier/safe-command.js";
 import { ModelSelectorComponent } from "./ui/model-selector.js";
 
 type ClassifierContext = Pick<ExtensionContext, "modelRegistry">;
@@ -99,23 +100,32 @@ export default async function (pi: ExtensionAPI) {
 
   pi.on("tool_call", async (event, ctx): Promise<ToolCallEventResult> => {
     try {
-      if (!automodeConfig.enabled) {
-        return handlePermissionToolCall(event, ctx);
-      }
-
-      // Allow all non-bash tools by default when automode is enabled.
+      // Allow all non-bash tools by default.
       if (!isToolCallEventType("bash", event)) {
         return { block: false };
       }
 
-      const lastUserPrompt = getLastUserPrompt(ctx.sessionManager.getBranch());
-      return (await getClassifier(ctx)).classify(
-        {
-          command: event.input.command,
-          lastUserPrompt,
-        },
-        ctx.signal,
-      );
+      switch (automodeConfig.autoMode) {
+        case "off":
+          return handlePermissionToolCall(event, ctx);
+        case "yolo": {
+          const allowed = await classifyKnownCommand(event.input.command);
+          return allowed === "block"
+            ? { block: true, reason: "Command classified as potentially dangerous" }
+            : { block: false };
+        }
+        case "auto":
+        default: {
+          const lastUserPrompt = getLastUserPrompt(ctx.sessionManager.getBranch());
+          return (await getClassifier(ctx)).classify(
+            {
+              command: event.input.command,
+              lastUserPrompt,
+            },
+            ctx.signal,
+          );
+        }
+      }
     } catch (error) {
       return {
         block: true,
@@ -125,23 +135,28 @@ export default async function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("auto", {
-    description: "Control if auto mode is [on|off]",
+    description: "Control auto mode: [auto|yolo|off]",
     getArgumentCompletions: (prefix) => {
       const options: AutocompleteItem[] = [
         {
-          value: "on",
-          label: "on",
-          description: "Enable auto mode for bash evaluation",
+          value: "auto",
+          label: "auto",
+          description: "LLM-powered classifier for bash evaluation",
+        },
+        {
+          value: "yolo",
+          label: "yolo",
+          description: "Only use static dangerous command filter",
         },
         {
           value: "off",
           label: "off",
-          description: "Disable auto mode for bash evaluation",
+          description: "Full permission prompts for risky commands",
         },
         {
           value: "show",
           label: "show",
-          description: "Show current auto mode status and model",
+          description: "Show current auto mode and model",
         },
       ];
 
@@ -150,29 +165,32 @@ export default async function (pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       const arg = args.trim().toLowerCase();
       switch (arg) {
-        case "on":
-          automodeConfig.enabled = true;
-          ctx.ui.notify("Auto mode enabled", "info");
+        case "auto":
+          automodeConfig.autoMode = "auto";
+          ctx.ui.notify("Auto mode set to: LLM classifier", "info");
+          break;
+        case "yolo":
+          automodeConfig.autoMode = "yolo";
+          ctx.ui.notify("Auto mode set to: yolo (static filter only)", "info");
           break;
         case "off":
-          automodeConfig.enabled = false;
-          ctx.ui.notify("Auto mode disabled; permission prompts enabled", "info");
+          automodeConfig.autoMode = "off";
+          ctx.ui.notify("Auto mode set to: off (permission prompts)", "info");
           break;
         case "show": {
-          const status = automodeConfig.enabled ? "enabled" : "disabled";
-          const permissions = automodeConfig.enabled ? "disabled" : "enabled";
+          const mode = automodeConfig.autoMode;
           const model = activeAutoModel
             ? `${activeAutoModel.id} [${activeAutoModel.provider}]`
             : "no model configured";
           ctx.ui.notify(
-            `Auto mode is ${status}; permission prompts: ${permissions}; model: ${model}`,
+            `Auto mode: ${mode}; model: ${model}`,
             "info",
           );
           break;
         }
         default:
-          automodeConfig.enabled = true;
-          ctx.ui.notify("Auto mode enabled", "info");
+          automodeConfig.autoMode = arg as "auto" | "yolo" | "off";
+          ctx.ui.notify(`Auto mode set to: ${arg}`, "info");
           break;
       }
     },

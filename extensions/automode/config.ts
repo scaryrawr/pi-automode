@@ -18,7 +18,13 @@ const automodeConfigSchema = Type.Object({
       provider: Type.String(),
     }),
   ),
-  enabled: Type.Optional(Type.Boolean()),
+  autoMode: Type.Optional(
+    Type.Union([
+      Type.Literal("auto"),
+      Type.Literal("yolo"),
+      Type.Literal("off"),
+    ]),
+  ),
 });
 
 /**
@@ -79,21 +85,21 @@ export class AutomodeConfigManager {
   }
 
   /**
-   * Gets whether automode is enabled.
-   * @returns True when automode is enabled, otherwise false.
+   * Gets the current auto mode.
+   * @returns The configured auto mode: "auto" (classifier), "yolo" (danger filter only), or "off" (permission prompts).
    */
-  get enabled(): boolean {
-    return this.config.enabled ?? true;
+  get autoMode(): "auto" | "yolo" | "off" {
+    return this.config.autoMode ?? "auto";
   }
 
   /**
-   * Updates the automode enabled flag and persists it.
-   * @param enabled - Whether automode should be enabled.
+   * Updates the auto mode and persists it.
+   * @param autoMode - The auto mode to set.
    */
-  set enabled(enabled: boolean) {
+  set autoMode(autoMode: "auto" | "yolo" | "off") {
     this.config = {
       ...this.config,
-      enabled,
+      autoMode,
     };
 
     this.writeConfig();

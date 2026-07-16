@@ -108,7 +108,9 @@ export class PermissionDialog {
       if (matchesKey(data, Key.enter)) {
         this.onDone?.({
           block: true,
-          reason: this.input.getValue() || "Blocked by user.",
+          reason: this.input.getValue()
+            ? `User provided feedback: "${this.input.getValue()}"`
+            : "Blocked by user.",
         });
         return;
       }
