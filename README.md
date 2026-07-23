@@ -10,9 +10,9 @@ When pi (the AI coding agent) generates a shell command, automode intercepts it 
 | -------------- | ------------------------------------------------------ |
 | **Safe**       | Command runs without interruption                      |
 | **Ask**        | pi pauses and asks you for confirmation before running |
-| **Dangerous**  | Command is blocked outright                            |
+| **Dangerous**  | Command is blocked by the active safety layer          |
 
-It also includes a built-in list of known-safe commands (e.g., `ls`, `cat`, `echo`) that are allowed instantly without consuming any model tokens.
+It also includes a built-in list of known-safe commands (e.g., `ls`, `cat`, `echo`) that are allowed instantly without consuming any model tokens. In `auto` mode, potentially destructive commands such as `rm` are sent to the LLM rather than blocked by the static filter, so explicit user intent can be considered. The static filter remains available in `yolo` mode.
 
 ## How it works
 

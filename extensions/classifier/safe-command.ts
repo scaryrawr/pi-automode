@@ -3,8 +3,8 @@
  * classification without LLM classification.
  *
  * Commands must parse cleanly and every command node must be known-allowed before
- * a command is auto-approved. Known-block command nodes can be blocked
- * without asking the LLM.
+ * a command is auto-approved. Known-block command nodes can be blocked without
+ * asking the LLM when static blocking is enabled.
  */
 
 import { createRequire } from "node:module";
@@ -417,16 +417,25 @@ const classifyPackageCommand = (
  * Handles dangerous commands, interactive editors, shells, systemctl, service, git,
  * package managers, sed, find, awk, and version flags.
  * @param commandNode - The tree-sitter command node.
+ * @param blockDangerousCommands - Whether commands in DANGEROUS_COMMANDS should
+ * be statically blocked instead of sent to the LLM.
  * @returns The classification result.
  */
-const classifyCommandNode = (commandNode: Node): KnownCommandClassification => {
+const classifyCommandNode = (
+  commandNode: Node,
+  blockDangerousCommands: boolean,
+): KnownCommandClassification => {
   const parts = getCommandParts(commandNode);
   if (!parts) {
     return "unknown";
   }
 
   const { name, args } = parts;
-  if (DANGEROUS_COMMANDS.has(name) || INTERACTIVE_EDITORS.has(name)) {
+  if (DANGEROUS_COMMANDS.has(name)) {
+    return blockDangerousCommands ? "block" : "unknown";
+  }
+
+  if (INTERACTIVE_EDITORS.has(name)) {
     return "block";
   }
 
@@ -487,9 +496,17 @@ const classifyCommandNode = (commandNode: Node): KnownCommandClassification => {
 /**
  * Classifies a shell command when its AST is clearly known-allowed or known-block.
  * @param command - The shell command to evaluate.
+ * @param options - Classification options.
+ * @param options.blockDangerousCommands - Statically block DANGEROUS_COMMANDS.
+ * Defaults to true for the static safety filter; the LLM-backed auto mode sets
+ * this to false so the model can consider the command and user intent.
  * @returns The known classification, or `"unknown"` if the command should be sent to the LLM.
  */
-export async function classifyKnownCommand(command: string): Promise<KnownCommandClassification> {
+export async function classifyKnownCommand(
+  command: string,
+  options: { blockDangerousCommands?: boolean } = {},
+): Promise<KnownCommandClassification> {
+  const blockDangerousCommands = options.blockDangerousCommands ?? true;
   const parser = await getParser();
   const tree = parser.parse(command);
   if (!tree) {
@@ -509,7 +526,7 @@ export async function classifyKnownCommand(command: string): Promise<KnownComman
 
     let sawUnknown = false;
     for (const commandNode of commandNodes) {
-      const classification = classifyCommandNode(commandNode);
+      const classification = classifyCommandNode(commandNode, blockDangerousCommands);
       if (classification === "block") {
         return "block";
       }

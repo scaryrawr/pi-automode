@@ -16,7 +16,7 @@ This repo implements the **automode extension** for the pi coding agent — an A
 
 **Key patterns:**
 
-- Short-circuit known safe/blocked shell commands before model classification.
+- Short-circuit known-safe shell commands before model classification. The static classifier blocks known-dangerous commands by default (used by `yolo`), while the LLM-backed `auto` mode calls `classifyKnownCommand(..., { blockDangerousCommands: false })` so commands such as `rm` can be evaluated with user intent.
 - Direct `completeSimple()` classifier calls with timeout/abort handling.
 - Config stored in the shared agent directory via `getAgentDir()`, not in the repo.
 
@@ -43,7 +43,8 @@ Validation: `npm run build` must pass (zero errors). Tests: `npm test` (integrat
 
 ## Safety
 
-- The extension blocks bash commands deemed dangerous by the classifier model.
+- In `auto` mode, the extension blocks bash commands deemed dangerous by the classifier model; potentially destructive commands are not automatically rejected before model evaluation.
+- `yolo` mode uses the static dangerous-command filter without LLM classification.
 - When automode is disabled, the extension prompts for permission instead of auto-approving risky bash calls; non-interactive contexts block prompt-required calls.
 - The `automodel` command (`/automodel`) persists the selected model to a JSON config file in the agent's home directory — not the repo.
 - Classifier sessions are in-memory only; no state is persisted between sessions except the model identifier.

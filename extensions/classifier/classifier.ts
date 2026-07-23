@@ -253,7 +253,11 @@ export const createClassifier = async (options: CreateClassifierOptions): Promis
       signal?: AbortSignal,
     ): Promise<ToolCallEventResult> => {
       // Short-circuit: known commands don't need LLM classification.
-      const knownClassification = await classifyKnownCommand(command);
+      // Keep obvious safe commands fast, but let the LLM evaluate potentially
+      // destructive commands in auto mode so it can use the user's intent.
+      const knownClassification = await classifyKnownCommand(command, {
+        blockDangerousCommands: false,
+      });
       if (knownClassification === "allow") {
         return { block: false };
       }

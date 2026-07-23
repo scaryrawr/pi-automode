@@ -21,6 +21,12 @@ describe("when classifying known shell commands with tree-sitter", () => {
     await expect(classifyKnownCommand("echo $(rm -rf *)")).resolves.toBe("block");
   });
 
+  it("should defer dangerous commands to the LLM when static blocking is disabled", async () => {
+    await expect(
+      classifyKnownCommand("rm -rf investigation-files", { blockDangerousCommands: false }),
+    ).resolves.toBe("unknown");
+  });
+
   it("should detect blocked commands in command lists", async () => {
     await expect(classifyKnownCommand("git status && rm -rf *")).resolves.toBe("block");
   });
