@@ -16,7 +16,7 @@ This repo implements the **automode extension** for the pi coding agent — an A
 
 **Key patterns:**
 
-- Short-circuit known-safe shell commands before model classification. The static classifier blocks known-dangerous commands by default (used by `yolo`), while the LLM-backed `auto` mode calls `classifyKnownCommand(..., { blockDangerousCommands: false })` so commands such as `rm` can be evaluated with user intent.
+- Short-circuit known-safe shell commands before model classification. The static classifier blocks known-dangerous commands by default (used by `yolo`), except that destructive-file cleanup (`rm`/`rmdir`/`shred`/`truncate`) of targets resolving **inside `cwd`** is allowed as safe local cleanup (outside cwd = suspicious). The LLM-backed `auto` mode calls `classifyKnownCommand(..., { blockDangerousCommands: false })` so commands such as `rm` can be evaluated with user intent.
 - Direct `completeSimple()` classifier calls with timeout/abort handling.
 - Config stored in the shared agent directory via `getAgentDir()`, not in the repo.
 

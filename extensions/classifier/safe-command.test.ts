@@ -52,4 +52,33 @@ describe("when classifying known shell commands with tree-sitter", () => {
   it("should detect destructive git commands", async () => {
     await expect(classifyKnownCommand("git reset --hard HEAD")).resolves.toBe("block");
   });
+
+  it("should allow cleanup of paths inside cwd under static blocking", async () => {
+    await expect(classifyKnownCommand("rm -rf node_modules")).resolves.toBe("allow");
+    await expect(classifyKnownCommand("rm -rf dist __pycache__ coverage")).resolves.toBe(
+      "allow",
+    );
+    await expect(classifyKnownCommand("rm -rf ./node_modules/")).resolves.toBe("allow");
+    await expect(classifyKnownCommand("rm -rf build/")).resolves.toBe("allow");
+    await expect(classifyKnownCommand("rm -rf dist/*")).resolves.toBe("allow");
+    await expect(classifyKnownCommand("rm __pycache__ -rf")).resolves.toBe("allow");
+    await expect(classifyKnownCommand("rm src/main.ts")).resolves.toBe("allow");
+    await expect(classifyKnownCommand("rmdir .next")).resolves.toBe("allow");
+  });
+
+  it("should still block cleanup of paths outside cwd", async () => {
+    await expect(classifyKnownCommand("rm -rf ../outside")).resolves.toBe("block");
+    await expect(classifyKnownCommand("rm -rf ../../etc/passwd")).resolves.toBe(
+      "block",
+    );
+    await expect(classifyKnownCommand("rm -rf /tmp/secret")).resolves.toBe("block");
+    await expect(classifyKnownCommand("rm -rf ~/secrets")).resolves.toBe("block");
+  });
+
+  it("should honour the cwd option when deciding whether cleanup is local", async () => {
+    // `../project/x` looks like it escapes, but relative to this cwd it stays inside.
+    await expect(
+      classifyKnownCommand("rm -rf ../project/x", { cwd: "/home/user/project" }),
+    ).resolves.toBe("allow");
+  });
 });

@@ -68,6 +68,13 @@ const SAFE_COMMANDS = new Set([
 ]);
 
 /**
+ * Set of destructive file commands (deletion/truncation). Under static blocking,
+ * these are only auto-approved when every target lives inside the current working
+ * directory; anything outside cwd is treated as suspicious and deferred/blocked.
+ */
+const DESTRUCTIVE_FILE_COMMANDS = new Set(["rm", "rmdir", "shred", "truncate"]);
+
+/**
  * Set of shell commands considered dangerous (destructive, privilege escalation, etc.).
  */
 const DANGEROUS_COMMANDS = new Set([
@@ -131,6 +138,61 @@ const PACKAGE_SAFE_SUBCOMMANDS = new Map([
   ["pip", new Set(["freeze", "inspect", "list", "show"])],
   ["yarn", new Set(["audit", "info", "list", "show", "why"])],
 ]);
+
+/**
+ * Resolves a destructive-file-command target against cwd and returns whether it
+ * lives inside the current working directory. Quotes and glob metacharacters are
+ * stripped so globs like "dist/*" collapse to their prefix ("dist"). Paths that
+ * can't be guaranteed inside cwd (empty, brace/tilde expansions like "~") and any
+ * path outside cwd — including absolute paths — are reported as not contained, so
+ * cleanup there is treated as suspicious.
+ * @param target - The raw target argument text from the command.
+ * @param cwd - The current working directory to resolve relative targets against.
+ * @returns True when the target resolves to a location strictly within cwd.
+ */
+const isTargetInsideCwd = (target: string, cwd: string): boolean => {
+  const cleaned = target.replace(/['"`]/g, "");
+  if (cleaned === "" || cleaned.includes("~")) {
+    return false;
+  }
+
+  const withoutGlobs = cleaned.replace(/[?*[]/g, "");
+  const resolved = path.resolve(
+    path.isAbsolute(withoutGlobs) ? withoutGlobs : cwd,
+    withoutGlobs,
+  );
+
+  const normalizedCwd = path.resolve(cwd);
+  return resolved.startsWith(normalizedCwd + path.sep);
+};
+
+/**
+ * Determines whether a destructive file command only targets paths inside cwd,
+ * in which case it is treated as safe local cleanup. Anything outside cwd is
+ * considered suspicious and left for blocking/LLM review.
+ * @param name - The normalized command name.
+ * @param args - The command arguments.
+ * @param cwd - The current working directory to resolve targets against.
+ * @returns True when the command deletes only paths within cwd.
+ */
+const isSafeLocalCleanup = (
+  name: string,
+  args: string[],
+  cwd: string,
+): boolean => {
+  if (!DESTRUCTIVE_FILE_COMMANDS.has(name)) {
+    return false;
+  }
+
+  const targets = args.filter((arg) => arg && !arg.startsWith("-"));
+  // A destructive command with no resolvable targets (e.g. `rm -i`) is not treated
+  // as cleanup; the caller keeps its default handling.
+  if (targets.length === 0) {
+    return false;
+  }
+
+  return targets.every((target) => isTargetInsideCwd(target, cwd));
+};
 
 /**
  * Set of shell interpreters (executing code via -c is dangerous).
@@ -414,16 +476,20 @@ const classifyPackageCommand = (
 
 /**
  * Classifies a single command node (one command in a pipeline/chain).
- * Handles dangerous commands, interactive editors, shells, systemctl, service, git,
- * package managers, sed, find, awk, and version flags.
+ * Handles destructive commands (local cleanup is allowed only inside cwd),
+ * interactive editors, shells, systemctl, service, git, package managers, sed,
+ * find, awk, and version flags.
  * @param commandNode - The tree-sitter command node.
  * @param blockDangerousCommands - Whether commands in DANGEROUS_COMMANDS should
  * be statically blocked instead of sent to the LLM.
+ * @param cwd - The current working directory; destructive commands targeting
+ * paths outside cwd are treated as suspicious.
  * @returns The classification result.
  */
 const classifyCommandNode = (
   commandNode: Node,
   blockDangerousCommands: boolean,
+  cwd: string,
 ): KnownCommandClassification => {
   const parts = getCommandParts(commandNode);
   if (!parts) {
@@ -432,6 +498,12 @@ const classifyCommandNode = (
 
   const { name, args } = parts;
   if (DANGEROUS_COMMANDS.has(name)) {
+    // Cleanup is safe only when every target stays inside cwd; paths outside the
+    // working directory are treated as suspicious and blocked/deferred as before.
+    if (blockDangerousCommands && isSafeLocalCleanup(name, args, cwd)) {
+      return "allow";
+    }
+
     return blockDangerousCommands ? "block" : "unknown";
   }
 
@@ -500,13 +572,16 @@ const classifyCommandNode = (
  * @param options.blockDangerousCommands - Statically block DANGEROUS_COMMANDS.
  * Defaults to true for the static safety filter; the LLM-backed auto mode sets
  * this to false so the model can consider the command and user intent.
+ * @param options.cwd - The current working directory used to decide whether a
+ * destructive command targets paths inside the project. Defaults to process.cwd().
  * @returns The known classification, or `"unknown"` if the command should be sent to the LLM.
  */
 export async function classifyKnownCommand(
   command: string,
-  options: { blockDangerousCommands?: boolean } = {},
+  options: { blockDangerousCommands?: boolean; cwd?: string } = {},
 ): Promise<KnownCommandClassification> {
   const blockDangerousCommands = options.blockDangerousCommands ?? true;
+  const cwd = options.cwd ?? process.cwd();
   const parser = await getParser();
   const tree = parser.parse(command);
   if (!tree) {
@@ -526,7 +601,7 @@ export async function classifyKnownCommand(
 
     let sawUnknown = false;
     for (const commandNode of commandNodes) {
-      const classification = classifyCommandNode(commandNode, blockDangerousCommands);
+      const classification = classifyCommandNode(commandNode, blockDangerousCommands, cwd);
       if (classification === "block") {
         return "block";
       }
